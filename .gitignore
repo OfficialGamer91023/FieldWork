@@ -1,0 +1,19 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+# Secrets
+.env
+# Terraform (provider binaries + state — state can hold secrets)
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfstate.*
+# Node
+node_modules/
+.next/
+# OS
+.DS_Store
+#docs
+ARCHITECTURE.md
+CLAUDE.md
