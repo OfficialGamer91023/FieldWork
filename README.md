@@ -2,6 +2,13 @@
 
 **Automated, adaptive voice user-interviews for founders.**
 
+<p>
+  <img alt="status" src="https://img.shields.io/badge/status-Phase%200%20complete-brightgreen">
+  <img alt="hackathon" src="https://img.shields.io/badge/AssemblyAI-Voice%20Agent%20Hackathon-6a5acd">
+  <img alt="python" src="https://img.shields.io/badge/Python-3.14-3776ab">
+  <img alt="license" src="https://img.shields.io/badge/scope-solo%20project-lightgrey">
+</p>
+
 A founder defines a research goal and a handful of seed questions. Fieldwork then runs
 real, *adaptive* voice interviews with their users — it asks follow-ups instead of reading
 a fixed script — and **synthesizes themes across all interviews** into a dashboard. The
@@ -12,9 +19,52 @@ Built for the **AssemblyAI Voice Agent Hackathon** (Sep 2026). Solo project, lea
 the goal is to learn AWS and distributed-systems design by building each piece by hand
 rather than reaching for an all-in-one API.
 
-> **Current status: Phase 0 (in progress).** A local browser → WebSocket → Python loop
-> that streams raw microphone audio to the backend. STT/LLM/TTS are not wired in yet.
-> See [Roadmap](#roadmap) and [What actually runs today](#what-actually-runs-today).
+> ### ✅ Current status — Phase 0 complete
+> The full local voice loop runs end to end: **browser mic → AssemblyAI streaming STT →
+> LLM interviewer (Featherless) → browser TTS → speaker.** The interviewer holds a
+> conversation and asks adaptive follow-ups. No AWS yet — that's Phase 1.
+> Jump to [What runs today](#what-runs-today) · [Progress](#progress) · [Roadmap](#roadmap).
+
+---
+
+## Progress
+
+Each phase leaves a working, demoable system, so a time slip just means submitting an
+earlier phase.
+
+| Phase | What it delivers | Status |
+|:---:|---|:---:|
+| **0** | Local voice loop (mic → STT → LLM → TTS) | ✅ Done |
+| **1** | On AWS — Fargate orchestrator + API Gateway WS, IaC | ⬜ Next |
+| **2** | Memory + control plane — DynamoDB, S3, dashboard | ⬜ Planned |
+| **3** | Async pipeline — SQS/EventBridge → Lambda extract | ⬜ Planned |
+| **4** | Synthesis — embeddings + cross-interview themes | ⬜ Planned |
+| **5** | Scale + polish — autoscaling, tracing, demo video | ⬜ Planned |
+
+<details>
+<summary><b>Phase 0 — detail</b> (all done)</summary>
+
+- [x] Browser mic capture via `AudioWorklet` → 16 kHz mono **Int16 PCM** chunks
+- [x] WebSocket backend that **proxies** audio to AssemblyAI streaming STT
+- [x] Live transcripts, with `end_of_turn` as the turn-taking signal
+- [x] LLM interviewer (Featherless / Qwen2.5-7B), OpenAI-compatible + swappable
+- [x] Per-connection conversation history → **adaptive** multi-turn follow-ups
+- [x] TTS reply via browser `SpeechSynthesis` — full spoken loop closed
+
+</details>
+
+<details>
+<summary><b>Known hardening items</b> (deferred — not Phase 0 blockers)</summary>
+
+- [ ] **Barge-in / interruption** — can't yet cut off the interviewer mid-speech (the
+  real-time-plane hard problem)
+- [ ] **Graceful shutdown** — `Ctrl+C` hangs; the two `asyncio.gather` loops never cancel
+  (matters on Fargate)
+- [ ] **Echo cancellation** — speakers feed the mic; needs headphones for now
+- [ ] Conversation history grows unbounded (tokens/latency/cost climb each turn)
+- [ ] Interview **topic** is hardcoded — later comes from the founder's study setup
+
+</details>
 
 ---
 
@@ -100,7 +150,7 @@ time allows:
 ```
 .
 ├── server/               # Phase 0 local backend
-│   ├── main.py           #   FastAPI app: serves the mic page, WebSocket at /ws
+│   ├── main.py           #   FastAPI app: serves the mic page, WebSocket proxy at /ws
 │   └── static/
 │       └── processor.js  #   AudioWorklet: captures mic, emits 16 kHz Int16 PCM chunks
 └── infra/
@@ -113,52 +163,35 @@ time allows:
 > gitignored — state can contain secrets and the binaries are large and platform-specific.
 > Run `terraform init` to fetch providers locally.
 
-## What actually runs today
+## What runs today
 
-**`server/`** — the Phase 0 real-time loop, local only, no AWS:
+**`server/`** — the Phase 0 real-time voice loop, local only, no AWS:
 
 1. The browser page opens a WebSocket to `ws://localhost:8000/ws`.
 2. An `AudioWorklet` (`static/processor.js`) captures the microphone and streams raw
    **16 kHz mono Int16 PCM** chunks over the socket.
-3. The FastAPI backend receives the byte frames and, for now, echoes back the length of
-   each chunk — proving the end-to-end audio path before STT/LLM/TTS are added.
+3. The FastAPI backend acts as a **proxy**: `asyncio.gather` runs two concurrent loops —
+   one forwarding audio bytes to **AssemblyAI streaming STT**, the other reading back `Turn`
+   messages.
+4. On `end_of_turn`, the finished utterance is appended to a per-connection history and sent
+   to the **LLM interviewer** (Featherless). The reply goes back over the WebSocket.
+5. The browser speaks the reply with **`SpeechSynthesis`** — closing the loop:
+   *mic → STT → LLM → TTS → speaker.*
+
+> 🎧 Use headphones. Without them, the speakers feed the mic and the interviewer transcribes
+> and replies to its own voice (echo cancellation is a deferred hardening item).
 
 **`infra/hello/`** — a first Terraform config that provisions a single S3 bucket
 (`fieldwork-tf-hello-<account-id>`). It exists to learn the Terraform init/plan/apply loop,
 not because the app needs it yet.
-
-### Run the Phase 0 loop
-
-```bash
-cd server
-python -m venv .venv && source .venv/bin/activate
-pip install fastapi "uvicorn[standard]"
-uvicorn main:app --reload --port 8000
-```
-
-Open <http://localhost:8000>, click **Start Recording**, allow mic access, and watch the
-`Received bytes of len: …` messages stream in.
-
-### Try the Terraform hello (optional)
-
-Requires AWS credentials (`aws configure`). **This creates a real S3 bucket** — run
-`terraform destroy` when done.
-
-```bash
-cd infra/hello
-terraform init
-terraform plan
-terraform apply
-```
 
 ## Roadmap
 
 Each phase leaves a working, demoable system — a time slip just means submitting an
 earlier phase.
 
-- **Phase 0 — local voice loop** *(in progress).* Browser mic → local backend →
-  AssemblyAI STT → LLM → TTS → audio back. Prove the real-time loop, including turn-taking
-  and interruption. *(Today: browser → WS → backend echo is working; STT/LLM/TTS next.)*
+- **Phase 0 — local voice loop** *(✅ complete).* Browser mic → AssemblyAI STT → LLM → TTS
+  → audio back. Full real-time loop proven locally. *(Interruption/barge-in deferred.)*
 - **Phase 1 — on AWS.** Containerize the orchestrator → ECS Fargate, front with API
   Gateway (WebSocket). IaC from day one.
 - **Phase 2 — memory + control plane.** DynamoDB (studies/sessions), S3 (transcripts),
