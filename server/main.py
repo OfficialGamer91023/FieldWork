@@ -9,6 +9,7 @@ import json
 import websockets
 from datetime import datetime 
 import asyncio
+from fastapi import WebSocketDisconnect
 
 app = FastAPI()
 load_dotenv()
@@ -156,7 +157,8 @@ async def websocket_endpoint(websocket: WebSocket):
 
     async with connect_to_assemblyai() as aai_ws:
         async def browser_to_aai():
-            async for chunk in websocket.iter_bytes():
+            while True:
+                chunk = await websocket.receive_bytes()
                 await aai_ws.send(chunk)
 
         async def aai_to_browser():
@@ -192,4 +194,9 @@ async def websocket_endpoint(websocket: WebSocket):
                 except Exception as e:
                     print(f"Error handling message: {e}")
                 
-        await asyncio.gather(browser_to_aai(), aai_to_browser())
+        try:
+            async with asyncio.TaskGroup() as tg:
+                tg.create_task(browser_to_aai())
+                tg.create_task(aai_to_browser())
+        except* WebSocketDisconnect:
+            print("Client disconnected")
