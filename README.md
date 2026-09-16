@@ -3,7 +3,7 @@
 **Automated, adaptive voice user-interviews for founders.**
 
 <p>
-  <img alt="status" src="https://img.shields.io/badge/status-Phase%200%20complete-brightgreen">
+  <img alt="status" src="https://img.shields.io/badge/status-Phase%201%20complete-brightgreen">
   <img alt="hackathon" src="https://img.shields.io/badge/AssemblyAI-Voice%20Agent%20Hackathon-6a5acd">
   <img alt="python" src="https://img.shields.io/badge/Python-3.14-3776ab">
   <img alt="license" src="https://img.shields.io/badge/scope-solo%20project-lightgrey">
@@ -19,10 +19,11 @@ Built for the **AssemblyAI Voice Agent Hackathon** (Sep 2026). Solo project, lea
 the goal is to learn AWS and distributed-systems design by building each piece by hand
 rather than reaching for an all-in-one API.
 
-> ### ✅ Current status — Phase 0 complete
-> The full local voice loop runs end to end: **browser mic → AssemblyAI streaming STT →
-> LLM interviewer (Featherless) → browser TTS → speaker.** The interviewer holds a
-> conversation and asks adaptive follow-ups. No AWS yet — that's Phase 1.
+> ### ✅ Current status — Phase 1 complete
+> The Phase 0 voice loop now runs on AWS. The orchestrator is containerized to **ECS Fargate**,
+> fronted by an **Application Load Balancer** (which passes the WebSocket straight through),
+> with API keys in **Secrets Manager**, logs in **CloudWatch**, and all networking (VPC,
+> subnets, route tables, security groups) defined in **Terraform** (`infra/app/`).
 > Jump to [What runs today](#what-runs-today) · [Progress](#progress) · [Roadmap](#roadmap).
 
 ---
@@ -35,8 +36,8 @@ earlier phase.
 | Phase | What it delivers | Status |
 |:---:|---|:---:|
 | **0** | Local voice loop (mic → STT → LLM → TTS) | ✅ Done |
-| **1** | On AWS — Fargate orchestrator + API Gateway WS, IaC | ⬜ Next |
-| **2** | Memory + control plane — DynamoDB, S3, dashboard | ⬜ Planned |
+| **1** | On AWS — Fargate orchestrator behind an ALB, IaC | ✅ Done |
+| **2** | Memory + control plane — DynamoDB, S3, dashboard | ⬜ Next |
 | **3** | Async pipeline — SQS/EventBridge → Lambda extract | ⬜ Planned |
 | **4** | Synthesis — embeddings + cross-interview themes | ⬜ Planned |
 | **5** | Scale + polish — autoscaling, tracing, demo video | ⬜ Planned |
@@ -58,8 +59,8 @@ earlier phase.
 
 - [ ] **Barge-in / interruption** — can't yet cut off the interviewer mid-speech (the
   real-time-plane hard problem)
-- [ ] **Graceful shutdown** — `Ctrl+C` hangs; the two `asyncio.gather` loops never cancel
-  (matters on Fargate)
+- [x] **Graceful shutdown** — structured teardown via `asyncio.TaskGroup` + `receive_bytes`;
+  `Ctrl+C`/SIGTERM now exit cleanly (matters on Fargate)
 - [ ] **Echo cancellation** — speakers feed the mic; needs headphones for now
 - [ ] Conversation history grows unbounded (tokens/latency/cost climb each turn)
 - [ ] Interview **topic** is hardcoded — later comes from the founder's study setup
@@ -95,7 +96,7 @@ REAL-TIME PLANE  (latency-critical)
   Respondent browser (WebAudio mic capture)
       │ audio frames over WebSocket
       ▼
-  API Gateway (WebSocket)
+  Application Load Balancer  (HTTP/WS passthrough)
       ▼
   Session Orchestrator  (ECS Fargate, long-lived)   ◀── we own the orchestration:
       ├─ audio  ─▶ AssemblyAI Realtime STT ─▶ partial/final transcripts + endpointing
@@ -154,7 +155,9 @@ time allows:
 │   └── static/
 │       └── processor.js  #   AudioWorklet: captures mic, emits 16 kHz Int16 PCM chunks
 └── infra/
-    └── hello/            # First Terraform config (learning): creates one S3 bucket
+    ├── app/             # Phase 1 Terraform: ECR, Secrets Manager, IAM, VPC, Fargate, ALB
+    │   └── main.tf
+    └── hello/           # First Terraform config (learning): creates one S3 bucket
         ├── main.tf
         └── .terraform.lock.hcl
 ```
@@ -170,7 +173,7 @@ time allows:
 1. The browser page opens a WebSocket to `ws://localhost:8000/ws`.
 2. An `AudioWorklet` (`static/processor.js`) captures the microphone and streams raw
    **16 kHz mono Int16 PCM** chunks over the socket.
-3. The FastAPI backend acts as a **proxy**: `asyncio.gather` runs two concurrent loops —
+3. The FastAPI backend acts as a **proxy**: an `asyncio.TaskGroup` runs two concurrent loops —
    one forwarding audio bytes to **AssemblyAI streaming STT**, the other reading back `Turn`
    messages.
 4. On `end_of_turn`, the finished utterance is appended to a per-connection history and sent
@@ -192,8 +195,8 @@ earlier phase.
 
 - **Phase 0 — local voice loop** *(✅ complete).* Browser mic → AssemblyAI STT → LLM → TTS
   → audio back. Full real-time loop proven locally. *(Interruption/barge-in deferred.)*
-- **Phase 1 — on AWS.** Containerize the orchestrator → ECS Fargate, front with API
-  Gateway (WebSocket). IaC from day one.
+- **Phase 1 — on AWS** *(✅ complete).* Containerize the orchestrator → ECS Fargate, front
+  with an Application Load Balancer (WebSocket passthrough). IaC from day one.
 - **Phase 2 — memory + control plane.** DynamoDB (studies/sessions), S3 (transcripts),
   founder dashboard, respondent study links.
 - **Phase 3 — async pipeline.** On call-end emit an event → SQS/EventBridge → Lambda
