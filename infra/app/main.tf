@@ -21,6 +21,11 @@ data "aws_iam_policy_document" "ecs_task_assume_role" {
   }
 }
 
+variable "allowed_ip" {
+  description = "Your public IP (with /32) allowed to reach the task for smoke testing"
+  type        = string
+}
+
 resource "aws_ecr_repository" "orchestrator" {
   name                 = "fieldwork-orchestrator"
   image_tag_mutability = "MUTABLE"
@@ -85,6 +90,11 @@ resource "aws_ecs_task_definition" "orchestrator" {
   execution_role_arn = aws_iam_role.execution.arn
   task_role_arn      = aws_iam_role.task.arn
 
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "ARM64"
+  }
+
   container_definitions = jsonencode([
     {
       name      = "orchestrator"
@@ -119,6 +129,105 @@ resource "aws_ecs_task_definition" "orchestrator" {
       }
     }
   ])
+}
+
+resource "aws_vpc" "main" {
+  cidr_block           = "10.0.0.0/16"
+  enable_dns_hostnames = true
+
+  tags = {
+    Name = "fieldwork-vpc"
+  }
+}
+
+resource "aws_internet_gateway" "main" {
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name = "fieldwork-igw"
+  }
+}
+
+resource "aws_subnet" "a" {
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = "10.0.1.0/24"
+  availability_zone = "us-east-1a"
+
+  tags = {
+    Name = "fieldwork-subnet-a"
+  }
+}
+
+resource "aws_subnet" "b" {
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = "10.0.2.0/24"
+  availability_zone = "us-east-1b"
+
+  tags = {
+    Name = "fieldwork-subnet-b"
+  }
+}
+
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.main.id
+  }
+
+  tags = {
+    Name = "fieldwork-public-rt"
+  }
+}
+
+resource "aws_route_table_association" "a" {
+  subnet_id      = aws_subnet.a.id
+  route_table_id = aws_route_table.public.id
+}
+
+resource "aws_route_table_association" "b" {
+  subnet_id      = aws_subnet.b.id
+  route_table_id = aws_route_table.public.id
+}
+
+resource "aws_security_group" "task" {
+  name   = "fieldwork-task-sg"
+  vpc_id = aws_vpc.main.id
+
+  ingress {
+    from_port   = 8000
+    to_port     = 8000
+    protocol    = "tcp"
+    cidr_blocks = [var.allowed_ip]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = { Name = "fieldwork-task-sg" }
+}
+
+resource "aws_ecs_cluster" "main" {
+  name = "fieldwork-cluster"
+}
+
+resource "aws_ecs_service" "orchestrator" {
+  name            = "fieldwork-orchestrator"
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.orchestrator.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = [aws_subnet.a.id, aws_subnet.b.id]
+    security_groups  = [aws_security_group.task.id]
+    assign_public_ip = true
+  }
 }
 
 output "execution_role_arn" { value = aws_iam_role.execution.arn }

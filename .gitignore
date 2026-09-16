@@ -9,6 +9,7 @@ __pycache__/
 *.tfstate
 *.tfstate.backup
 *.tfstate.*
+*.tfvars
 # Node
 node_modules/
 .next/
