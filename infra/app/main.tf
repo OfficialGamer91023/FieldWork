@@ -75,5 +75,51 @@ resource "aws_cloudwatch_log_group" "orchestrator" {
   retention_in_days = 14
 }
 
+resource "aws_ecs_task_definition" "orchestrator" {
+  family                   = "fieldwork-orchestrator"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "256"
+  memory                   = "512"
+
+  execution_role_arn = aws_iam_role.execution.arn
+  task_role_arn      = aws_iam_role.task.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "orchestrator"
+      image     = "${aws_ecr_repository.orchestrator.repository_url}:latest"
+      essential = true
+
+      portMappings = [
+        {
+          containerPort = 8000
+          protocol      = "tcp"
+        }
+      ]
+
+      secrets = [
+        {
+          name      = "ASSEMBLY_API"
+          valueFrom = "${aws_secretsmanager_secret.fieldwork_apis.arn}:ASSEMBLY_API::"
+        },
+        {
+          name      = "FEATHERLESS_API"
+          valueFrom = "${aws_secretsmanager_secret.fieldwork_apis.arn}:FEATHERLESS_API::"
+        }
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = aws_cloudwatch_log_group.orchestrator.name
+          "awslogs-region"        = "us-east-1"
+          "awslogs-stream-prefix" = "orchestrator"
+        }
+      }
+    }
+  ])
+}
+
 output "execution_role_arn" { value = aws_iam_role.execution.arn }
 output "task_role_arn" { value = aws_iam_role.task.arn }
