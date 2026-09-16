@@ -196,10 +196,10 @@ resource "aws_security_group" "task" {
   vpc_id = aws_vpc.main.id
 
   ingress {
-    from_port   = 8000
-    to_port     = 8000
-    protocol    = "tcp"
-    cidr_blocks = [var.allowed_ip]
+    from_port       = 8000
+    to_port         = 8000
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb.id]
   }
 
   egress {
@@ -228,7 +228,66 @@ resource "aws_ecs_service" "orchestrator" {
     security_groups  = [aws_security_group.task.id]
     assign_public_ip = true
   }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.orchestrator.arn
+    container_name   = "orchestrator"
+    container_port   = 8000
+  }
+
+  depends_on = [aws_lb_listener.http]
+}
+
+resource "aws_security_group" "alb" {
+  name   = "fieldwork-alb-sg"
+  vpc_id = aws_vpc.main.id
+
+  ingress { # who can reach the ALB
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = [var.allowed_ip] # keep it to your IP for now; open to 0.0.0.0/0 later
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  tags = { Name = "fieldwork-alb-sg" }
+}
+
+resource "aws_lb" "main" {
+  name               = "fieldwork-alb"
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb.id]
+  subnets            = [aws_subnet.a.id, aws_subnet.b.id]
+}
+
+resource "aws_lb_target_group" "orchestrator" {
+  name        = "fieldwork-tg"
+  port        = 8000
+  protocol    = "HTTP"
+  vpc_id      = aws_vpc.main.id
+  target_type = "ip"
+
+  health_check {
+    path    = "/"
+    matcher = "200"
+  }
+}
+
+resource "aws_lb_listener" "http" {
+  load_balancer_arn = aws_lb.main.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.orchestrator.arn
+  }
 }
 
 output "execution_role_arn" { value = aws_iam_role.execution.arn }
 output "task_role_arn" { value = aws_iam_role.task.arn }
+output "alb_dns_name" { value = aws_lb.main.dns_name }
