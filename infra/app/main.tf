@@ -73,6 +73,30 @@ resource "aws_iam_role" "task" {
   assume_role_policy = data.aws_iam_policy_document.ecs_task_assume_role.json
 }
 
+data "aws_iam_policy_document" "task_permissions" {
+  statement {
+    actions = ["dynamodb:Query"]
+    resources = [
+      aws_dynamodb_table.studies.arn,
+      "${aws_dynamodb_table.studies.arn}/index/*"
+    ]
+  }
+  statement {
+    actions   = ["dynamodb:PutItem"]
+    resources = [aws_dynamodb_table.sessions.arn]
+  }
+  statement {
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.transcripts.arn}/*"]
+  }
+}
+
+resource "aws_iam_role_policy" "task_permissions" {
+  name   = "task-permissions"
+  role   = aws_iam_role.task.name
+  policy = data.aws_iam_policy_document.task_permissions.json
+}
+
 output "fieldwork_apis_secret_arn" {
   value = aws_secretsmanager_secret.fieldwork_apis.arn
 }
@@ -109,6 +133,21 @@ resource "aws_ecs_task_definition" "orchestrator" {
         {
           containerPort = 8000
           protocol      = "tcp"
+        }
+      ]
+
+      environment = [
+        {
+          name  = "STUDIES_TABLE"
+          value = aws_dynamodb_table.studies.name
+        },
+        {
+          name  = "SESSIONS_TABLE"
+          value = aws_dynamodb_table.sessions.name
+        },
+        {
+          name  = "TRANSCRIPTS_BUCKET"
+          value = aws_s3_bucket.transcripts.bucket
         }
       ]
 

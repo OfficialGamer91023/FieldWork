@@ -7,15 +7,24 @@ from urllib.parse import urlencode
 from dotenv import load_dotenv
 import json
 import websockets
-from datetime import datetime 
+from datetime import datetime, timezone 
 import asyncio
 from fastapi import WebSocketDisconnect
+import boto3
+from boto3.dynamodb.conditions import Key
+import uuid
 
 app = FastAPI()
 load_dotenv()
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 ASSEMBLY_API_KEY = os.environ["ASSEMBLY_API"]
 FEATHERLESS_API_KEY = os.environ["FEATHERLESS_API"]
+
+dynamodb = boto3.resource("dynamodb")
+studies_table = dynamodb.Table(os.environ["STUDIES_TABLE"])
+sessions_table = dynamodb.Table(os.environ["SESSIONS_TABLE"])
+s3 = boto3.client("s3")
+BUCKET = os.environ["TRANSCRIPTS_BUCKET"]
 
 CLIENT = AsyncOpenAI(
 base_url="https://api.featherless.ai/v1",
@@ -141,19 +150,47 @@ async def get():
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.close(code=1008)
+        return
+
+    resp = await asyncio.to_thread(
+        studies_table.query, 
+        IndexName="byInviteToken", 
+        KeyConditionExpression=Key("inviteToken").eq(token)
+    )
+    items = resp.get("Items", [])
+    if not items or items[0].get("status") != "live":
+        await websocket.close(code=1008)
+        return
+
+    study = items[0]
+    study_id = study.get("studyId")
+    session_id = uuid.uuid4().hex
+
     await websocket.accept()
-    messages = [
-        {"role": "system", "content": """You are an expert user researcher conducting a live voice interview.
+    
+    goal = study.get("goal", "")
+    seed_questions = "\n".join(f"- {q}" for q in study.get("seedQuestions", []))
+    
+    system_prompt = f"""You are an expert user researcher conducting a live voice interview.
 
-        Your research goal: understand how the person currently handles planning and cooking weeknight dinners — their workflow, their frustrations, and what they do.
+Your research goal: {goal}
 
-        Rules:
-        - Ask exactly ONE open-ended question per turn. Never stack multiple questions.
-        - Dig into specifics and emotions. When they mention a frustration, ask them to walk you through the last time it happened, or why it mattered.
-        - Keep it short and conversational — you are being spoken aloud by a text-to-speech voice. Limit responses to 1-2 sentences.
-        - Do not give advice, opinions, or answer factual/trivia questions. If they go off-topic, gently steer back to the research goal.
-        - Start by warmly introducing yourself in one sentence and asking your first question."""}
-    ]   
+Seed questions to cover:
+{seed_questions}
+
+Rules:
+- Ask exactly ONE open-ended question per turn. Never stack multiple questions.
+- Dig into specifics and emotions. When they mention a frustration, ask them to walk you through the last time it happened, or why it mattered.
+- Keep it short and conversational — you are being spoken aloud by a text-to-speech voice. Limit responses to 1-2 sentences.
+- Do not give advice, opinions, or answer factual/trivia questions. If they go off-topic, gently steer back to the research goal.
+- Start by warmly introducing yourself in one sentence and asking your first question."""
+
+    messages = [{"role": "system", "content": system_prompt}]
+    
+    is_graceful_termination = False
 
     async with connect_to_assemblyai() as aai_ws:
         async def browser_to_aai():
@@ -162,15 +199,16 @@ async def websocket_endpoint(websocket: WebSocket):
                 await aai_ws.send(chunk)
 
         async def aai_to_browser():
+            nonlocal is_graceful_termination
             async for message in aai_ws:
                 try:
                     data = json.loads(message)
                     msg_type = data.get('type')
 
                     if msg_type == "Begin":
-                        session_id = data.get('id')
+                        aai_session_id = data.get('id')
                         expires_at = data.get('expires_at')
-                        print(f"\nSession began: ID={session_id}, ExpiresAt={datetime.fromtimestamp(expires_at)}")
+                        print(f"\nSession began: ID={aai_session_id}, ExpiresAt={datetime.fromtimestamp(expires_at)}")
                     elif msg_type == "Turn":
                         transcript = data.get('transcript', '')
                         end_turn = data.get('end_of_turn', False)
@@ -186,6 +224,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         else:
                             print(f"\r{transcript}", end='')
                     elif msg_type == "Termination":
+                        is_graceful_termination = True
                         audio_duration = data.get('audio_duration_seconds', 0)
                         session_duration = data.get('session_duration_seconds', 0)
                         print(f"\nSession Terminated: Audio Duration={audio_duration}s, Session Duration={session_duration}s")
@@ -200,3 +239,27 @@ async def websocket_endpoint(websocket: WebSocket):
                 tg.create_task(aai_to_browser())
         except* WebSocketDisconnect:
             print("Client disconnected")
+        finally:
+            try:
+                key = f"transcripts/{study_id}/{session_id}.json"
+                
+                await asyncio.to_thread(
+                    s3.put_object, 
+                    Bucket=BUCKET, 
+                    Key=key,
+                    Body=json.dumps(messages).encode()
+                )
+                
+                await asyncio.to_thread(
+                    sessions_table.put_item, 
+                    Item={
+                        "studyId": study_id, 
+                        "sessionId": session_id,
+                        "endedAt": datetime.now(timezone.utc).isoformat(), 
+                        "turnCount": (len(messages) - 1) // 2, 
+                        "transcriptKey": key,
+                        "status": "completed" if is_graceful_termination else "aborted"
+                    }
+                )
+            except Exception as e:
+                print(f"Error persisting session data: {e}")
