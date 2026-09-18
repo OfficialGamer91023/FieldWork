@@ -190,7 +190,7 @@ Rules:
 
     messages = [{"role": "system", "content": system_prompt}]
     
-    is_graceful_termination = False
+    ended_cleanly = False
 
     async with connect_to_assemblyai() as aai_ws:
         async def browser_to_aai():
@@ -199,7 +199,6 @@ Rules:
                 await aai_ws.send(chunk)
 
         async def aai_to_browser():
-            nonlocal is_graceful_termination
             async for message in aai_ws:
                 try:
                     data = json.loads(message)
@@ -224,7 +223,6 @@ Rules:
                         else:
                             print(f"\r{transcript}", end='')
                     elif msg_type == "Termination":
-                        is_graceful_termination = True
                         audio_duration = data.get('audio_duration_seconds', 0)
                         session_duration = data.get('session_duration_seconds', 0)
                         print(f"\nSession Terminated: Audio Duration={audio_duration}s, Session Duration={session_duration}s")
@@ -238,6 +236,7 @@ Rules:
                 tg.create_task(browser_to_aai())
                 tg.create_task(aai_to_browser())
         except* WebSocketDisconnect:
+            ended_cleanly = True
             print("Client disconnected")
         finally:
             try:
@@ -258,7 +257,7 @@ Rules:
                         "endedAt": datetime.now(timezone.utc).isoformat(), 
                         "turnCount": (len(messages) - 1) // 2, 
                         "transcriptKey": key,
-                        "status": "completed" if is_graceful_termination else "aborted"
+                        "status": "completed" if ended_cleanly else "aborted"
                     }
                 )
             except Exception as e:

@@ -6,6 +6,7 @@ import boto3
 import decimal
 from datetime import datetime, timezone
 from boto3.dynamodb.conditions import Key
+from botocore.exceptions import ClientError
 
 class DecimalEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -29,6 +30,8 @@ def handler(event, context):
         return list_studies(event)
     if route == "GET /studies/{id}":
         return get_study(event)
+    if route == "PATCH /studies/{id}":
+        return publish_study(event)
     if route == "GET /invite/{token}":
         return resolve_invite(event)
 
@@ -140,6 +143,37 @@ def get_study(event):
         "headers": {"Content-Type": "application/json"},
         "body": json.dumps(item, cls=DecimalEncoder)
     }
+
+def publish_study(event):
+    """
+    Handles PATCH /studies/{id} — flips a study from draft to live.
+    The ConditionExpression makes this a no-op-safe 404 if the study
+    doesn't exist, instead of silently creating a bare item.
+    """
+    study_id = event.get("pathParameters", {}).get("id")
+    try:
+        table.update_item(
+            Key={"studyId": study_id},
+            UpdateExpression="SET #s = :live",
+            ConditionExpression="attribute_exists(studyId)",
+            ExpressionAttributeNames={"#s": "status"},  # status is a reserved word
+            ExpressionAttributeValues={":live": "live"},
+        )
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            return {
+                "statusCode": 404,
+                "headers": {"Content-Type": "application/json"},
+                "body": json.dumps({"error": "study not found"})
+            }
+        raise
+
+    return {
+        "statusCode": 200,
+        "headers": {"Content-Type": "application/json"},
+        "body": json.dumps({"studyId": study_id, "status": "live"})
+    }
+
 
 def resolve_invite(event):
     token_id = event.get("pathParameters", {}).get("token")

@@ -445,7 +445,8 @@ data "aws_iam_policy_document" "control_plane_dynamodb" {
     actions = [
       "dynamodb:PutItem",
       "dynamodb:GetItem",
-      "dynamodb:Query"
+      "dynamodb:Query",
+      "dynamodb:UpdateItem"
     ]
     resources = [
       aws_dynamodb_table.studies.arn,
@@ -508,6 +509,12 @@ resource "aws_apigatewayv2_route" "control_plane_get_studies" {
 resource "aws_apigatewayv2_route" "control_plane_get_study" {
   api_id    = aws_apigatewayv2_api.control_plane.id
   route_key = "GET /studies/{id}"
+  target    = "integrations/${aws_apigatewayv2_integration.control_plane.id}"
+}
+
+resource "aws_apigatewayv2_route" "control_plane_publish_study" {
+  api_id    = aws_apigatewayv2_api.control_plane.id
+  route_key = "PATCH /studies/{id}"
   target    = "integrations/${aws_apigatewayv2_integration.control_plane.id}"
 }
 
