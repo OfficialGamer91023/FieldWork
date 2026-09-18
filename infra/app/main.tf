@@ -4,6 +4,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.0"
+    }
   }
 }
 
@@ -288,6 +292,201 @@ resource "aws_lb_listener" "http" {
   }
 }
 
+resource "aws_dynamodb_table" "studies" {
+  name         = "fieldwork-studies"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "studyId"
+
+  # Production-hardening (skipped for budget/learning):
+  # deletion_protection_enabled = true
+  # point_in_time_recovery {
+  #   enabled = true
+  # }
+
+  attribute {
+    name = "studyId"
+    type = "S"
+  }
+
+  attribute {
+    name = "founderId"
+    type = "S"
+  }
+
+  attribute {
+    name = "createdAt"
+    type = "S"
+  }
+
+  attribute {
+    name = "inviteToken"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "byFounder"
+    hash_key        = "founderId"
+    range_key       = "createdAt"
+    projection_type = "ALL"
+  }
+
+  global_secondary_index {
+    name            = "byInviteToken"
+    hash_key        = "inviteToken"
+    projection_type = "ALL"
+  }
+}
+
+resource "aws_dynamodb_table" "sessions" {
+  name         = "fieldwork-sessions"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "studyId"
+  range_key    = "sessionId"
+
+  # Production-hardening (skipped for budget/learning):
+  # deletion_protection_enabled = true
+  # point_in_time_recovery {
+  #   enabled = true
+  # }
+
+  attribute {
+    name = "studyId"
+    type = "S"
+  }
+
+  attribute {
+    name = "sessionId"
+    type = "S"
+  }
+}
+
+data "aws_caller_identity" "current" {}
+
+resource "aws_s3_bucket" "transcripts" {
+  bucket        = "fieldwork-transcripts-${data.aws_caller_identity.current.account_id}"
+  force_destroy = true
+}
+
+resource "aws_s3_bucket_public_access_block" "transcripts" {
+  bucket                  = aws_s3_bucket.transcripts.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+data "archive_file" "control_plane" {
+  type        = "zip"
+  source_dir  = "${path.module}/../../control-plane"
+  output_path = "${path.module}/control-plane.zip"
+}
+
+data "aws_iam_policy_document" "control_plane_lambda_assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "control_plane_lambda" {
+  name               = "fieldwork-control-plane-lambda"
+  assume_role_policy = data.aws_iam_policy_document.control_plane_lambda_assume.json
+}
+
+resource "aws_iam_role_policy_attachment" "control_plane_lambda_basic" {
+  role       = aws_iam_role.control_plane_lambda.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+data "aws_iam_policy_document" "control_plane_dynamodb" {
+  statement {
+    actions = [
+      "dynamodb:PutItem",
+      "dynamodb:GetItem",
+      "dynamodb:Query"
+    ]
+    resources = [
+      aws_dynamodb_table.studies.arn,
+      "${aws_dynamodb_table.studies.arn}/index/*"
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "control_plane_dynamodb" {
+  name   = "dynamodb-access"
+  role   = aws_iam_role.control_plane_lambda.name
+  policy = data.aws_iam_policy_document.control_plane_dynamodb.json
+}
+
+resource "aws_lambda_function" "control_plane" {
+  function_name    = "fieldwork-control-plane"
+  role             = aws_iam_role.control_plane_lambda.arn
+  handler          = "handler.handler"
+  runtime          = "python3.13"
+  filename         = data.archive_file.control_plane.output_path
+  source_code_hash = data.archive_file.control_plane.output_base64sha256
+
+  environment {
+    variables = {
+      STUDIES_TABLE = aws_dynamodb_table.studies.name
+    }
+  }
+}
+
+resource "aws_apigatewayv2_api" "control_plane" {
+  name          = "fieldwork-control-plane"
+  protocol_type = "HTTP"
+}
+
+resource "aws_apigatewayv2_stage" "control_plane_default" {
+  api_id      = aws_apigatewayv2_api.control_plane.id
+  name        = "$default"
+  auto_deploy = true
+}
+
+resource "aws_apigatewayv2_integration" "control_plane" {
+  api_id                 = aws_apigatewayv2_api.control_plane.id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = aws_lambda_function.control_plane.invoke_arn
+  payload_format_version = "2.0"
+}
+
+resource "aws_apigatewayv2_route" "control_plane_post_studies" {
+  api_id    = aws_apigatewayv2_api.control_plane.id
+  route_key = "POST /studies"
+  target    = "integrations/${aws_apigatewayv2_integration.control_plane.id}"
+}
+
+resource "aws_apigatewayv2_route" "control_plane_get_studies" {
+  api_id    = aws_apigatewayv2_api.control_plane.id
+  route_key = "GET /studies"
+  target    = "integrations/${aws_apigatewayv2_integration.control_plane.id}"
+}
+
+resource "aws_apigatewayv2_route" "control_plane_get_study" {
+  api_id    = aws_apigatewayv2_api.control_plane.id
+  route_key = "GET /studies/{id}"
+  target    = "integrations/${aws_apigatewayv2_integration.control_plane.id}"
+}
+
+resource "aws_apigatewayv2_route" "control_plane_get_invite" {
+  api_id    = aws_apigatewayv2_api.control_plane.id
+  route_key = "GET /invite/{token}"
+  target    = "integrations/${aws_apigatewayv2_integration.control_plane.id}"
+}
+
+resource "aws_lambda_permission" "apigw_control_plane" {
+  statement_id  = "AllowExecutionFromAPIGateway"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.control_plane.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.control_plane.execution_arn}/*/*"
+}
+
 output "execution_role_arn" { value = aws_iam_role.execution.arn }
 output "task_role_arn" { value = aws_iam_role.task.arn }
 output "alb_dns_name" { value = aws_lb.main.dns_name }
+output "control_plane_api_url" { value = aws_apigatewayv2_stage.control_plane_default.invoke_url }
