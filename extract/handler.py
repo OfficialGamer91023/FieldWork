@@ -27,16 +27,22 @@ def _load_featherless_key():
 FEATHERLESS_API_KEY = _load_featherless_key()
 
 SYSTEM_PROMPT = """You are an expert qualitative researcher.
-Analyze the following interview transcript and extract:
-1. Key answers/takeaways.
-2. The overall sentiment (positive, negative, or neutral).
-3. 1-2 powerful direct quotes from the user.
+Analyze the following interview transcript (a dialogue between an Interviewer
+and a User) and extract:
+1. "answers": the key takeaways, written in YOUR OWN words as concise summary
+   points. Paraphrase — do not just copy the user's sentences.
+2. "sentiment": the User's overall sentiment — exactly one of "positive",
+   "negative", "neutral", or "mixed".
+3. "quotes": 1-2 of the User's most revealing statements copied VERBATIM — the
+   User's exact words, word-for-word, never paraphrased or summarized.
+
+Only use content the User actually said. Never invent answers or quotes.
 
 Output strictly as JSON with this schema:
 {
-    "answers": ["point 1", "point 2"],
-    "sentiment": "positive",
-    "quotes": ["quote 1"]
+    "answers": ["takeaway in your own words", "another takeaway"],
+    "sentiment": "mixed",
+    "quotes": ["the user's exact words"]
 }"""
 
 def _parse_insight(content):
@@ -85,13 +91,37 @@ def handler(event, context):
         s3_resp = s3.get_object(Bucket=BUCKET, Key=transcript_key)
         transcript_data = json.loads(s3_resp["Body"].read().decode('utf-8'))
         
+        # Guard: an interview with no user turns has nothing to extract.
+        # Skip the LLM call entirely so we never fabricate insight from an
+        # empty transcript (garbage-in must not become confident-garbage-out).
+        user_turns = sum(1 for m in transcript_data if m.get("role") == "user")
+        if user_turns == 0:
+            print(f"No user turns for {session_id}; marking empty, skipping extraction")
+            try:
+                sessions_table.update_item(
+                    Key={"studyId": study_id, "sessionId": session_id},
+                    UpdateExpression="SET #a = :a, #s = :s, #q = :q, #p = :p",
+                    ConditionExpression="attribute_not_exists(#p)",
+                    ExpressionAttributeNames={
+                        "#a": "answers", "#s": "sentiment", "#q": "quotes", "#p": "processedAt",
+                    },
+                    ExpressionAttributeValues={
+                        ":a": [], ":s": "n/a", ":q": [],
+                        ":p": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+            except ClientError as e:
+                if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+                    raise
+            continue
+
         # Format the transcript into a readable string for the LLM
         transcript_text = ""
         for msg in transcript_data:
             if msg["role"] == "system": continue
             role = "Interviewer" if msg["role"] == "assistant" else "User"
             transcript_text += f"{role}: {msg['content']}\n"
-            
+
         # 3. Call Featherless via urllib
         req_body = json.dumps({
             "model": "Qwen/Qwen2.5-7B-Instruct",  # same model the orchestrator uses on Featherless
