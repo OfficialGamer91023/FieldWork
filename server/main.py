@@ -25,6 +25,8 @@ studies_table = dynamodb.Table(os.environ["STUDIES_TABLE"])
 sessions_table = dynamodb.Table(os.environ["SESSIONS_TABLE"])
 s3 = boto3.client("s3")
 BUCKET = os.environ["TRANSCRIPTS_BUCKET"]
+sqs = boto3.client("sqs")
+EXTRACTION_QUEUE_URL = os.environ.get("EXTRACTION_QUEUE_URL")
 
 CLIENT = AsyncOpenAI(
 base_url="https://api.featherless.ai/v1",
@@ -260,5 +262,16 @@ Rules:
                         "status": "completed" if ended_cleanly else "aborted"
                     }
                 )
+                
+                if EXTRACTION_QUEUE_URL:
+                    payload = {
+                        "studyId": study_id,
+                        "sessionId": session_id
+                    }
+                    await asyncio.to_thread(
+                        sqs.send_message,
+                        QueueUrl=EXTRACTION_QUEUE_URL,
+                        MessageBody=json.dumps(payload)
+                    )
             except Exception as e:
                 print(f"Error persisting session data: {e}")

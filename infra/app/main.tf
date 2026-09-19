@@ -89,6 +89,10 @@ data "aws_iam_policy_document" "task_permissions" {
     actions   = ["s3:PutObject"]
     resources = ["${aws_s3_bucket.transcripts.arn}/*"]
   }
+  statement {
+    actions   = ["sqs:SendMessage"]
+    resources = [aws_sqs_queue.extraction.arn]
+  }
 }
 
 resource "aws_iam_role_policy" "task_permissions" {
@@ -148,6 +152,10 @@ resource "aws_ecs_task_definition" "orchestrator" {
         {
           name  = "TRANSCRIPTS_BUCKET"
           value = aws_s3_bucket.transcripts.bucket
+        },
+        {
+          name  = "EXTRACTION_QUEUE_URL"
+          value = aws_sqs_queue.extraction.url
         }
       ]
 
@@ -414,6 +422,19 @@ resource "aws_s3_bucket_public_access_block" "transcripts" {
   restrict_public_buckets = true
 }
 
+resource "aws_sqs_queue" "extraction_dlq" {
+  name = "fieldwork-extraction-dlq"
+}
+
+resource "aws_sqs_queue" "extraction" {
+  name                       = "fieldwork-extraction"
+  visibility_timeout_seconds = 180
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.extraction_dlq.arn
+    maxReceiveCount     = 3
+  })
+}
+
 data "archive_file" "control_plane" {
   type        = "zip"
   source_dir  = "${path.module}/../../control-plane"
@@ -530,6 +551,90 @@ resource "aws_lambda_permission" "apigw_control_plane" {
   function_name = aws_lambda_function.control_plane.function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.control_plane.execution_arn}/*/*"
+}
+
+data "archive_file" "extractor" {
+  type        = "zip"
+  source_dir  = "${path.module}/../../extract"
+  output_path = "${path.module}/extractor.zip"
+}
+
+data "aws_iam_policy_document" "extractor_lambda_assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "extractor_lambda" {
+  name               = "fieldwork-extractor-lambda"
+  assume_role_policy = data.aws_iam_policy_document.extractor_lambda_assume.json
+}
+
+resource "aws_iam_role_policy_attachment" "extractor_lambda_basic" {
+  role       = aws_iam_role.extractor_lambda.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+data "aws_iam_policy_document" "extractor_permissions" {
+  statement {
+    actions = [
+      "sqs:ReceiveMessage",
+      "sqs:DeleteMessage",
+      "sqs:GetQueueAttributes"
+    ]
+    resources = [aws_sqs_queue.extraction.arn]
+  }
+  statement {
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:UpdateItem"
+    ]
+    resources = [aws_dynamodb_table.sessions.arn]
+  }
+  statement {
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.transcripts.arn}/*"]
+  }
+  statement {
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = [aws_secretsmanager_secret.fieldwork_apis.arn]
+  }
+}
+
+resource "aws_iam_role_policy" "extractor_permissions" {
+  name   = "extractor-permissions"
+  role   = aws_iam_role.extractor_lambda.name
+  policy = data.aws_iam_policy_document.extractor_permissions.json
+}
+
+resource "aws_lambda_function" "extractor" {
+  function_name    = "fieldwork-extractor"
+  role             = aws_iam_role.extractor_lambda.arn
+  handler          = "handler.handler"
+  runtime          = "python3.13"
+  filename         = data.archive_file.extractor.output_path
+  source_code_hash = data.archive_file.extractor.output_base64sha256
+  timeout          = 30
+
+  environment {
+    variables = {
+      SESSIONS_TABLE     = aws_dynamodb_table.sessions.name
+      TRANSCRIPTS_BUCKET = aws_s3_bucket.transcripts.bucket
+      # Pass only the secret's ARN; the handler fetches the value at runtime
+      # via GetSecretValue so the plaintext key never lands in tfstate.
+      FIELDWORK_SECRET_ARN = aws_secretsmanager_secret.fieldwork_apis.arn
+    }
+  }
+}
+
+resource "aws_lambda_event_source_mapping" "extractor_sqs" {
+  event_source_arn = aws_sqs_queue.extraction.arn
+  function_name    = aws_lambda_function.extractor.arn
+  batch_size       = 1
 }
 
 output "execution_role_arn" { value = aws_iam_role.execution.arn }
