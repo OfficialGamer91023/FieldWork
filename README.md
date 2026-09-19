@@ -3,7 +3,7 @@
 **Automated, adaptive voice user-interviews for founders.**
 
 <p>
-  <img alt="status" src="https://img.shields.io/badge/status-Phase%201%20complete-brightgreen">
+  <img alt="status" src="https://img.shields.io/badge/status-Phase%203%20complete-brightgreen">
   <img alt="hackathon" src="https://img.shields.io/badge/AssemblyAI-Voice%20Agent%20Hackathon-6a5acd">
   <img alt="python" src="https://img.shields.io/badge/Python-3.14-3776ab">
   <img alt="license" src="https://img.shields.io/badge/scope-solo%20project-lightgrey">
@@ -19,11 +19,14 @@ Built for the **AssemblyAI Voice Agent Hackathon** (Sep 2026). Solo project, lea
 the goal is to learn AWS and distributed-systems design by building each piece by hand
 rather than reaching for an all-in-one API.
 
-> ### ✅ Current status — Phase 1 complete
-> The Phase 0 voice loop now runs on AWS. The orchestrator is containerized to **ECS Fargate**,
-> fronted by an **Application Load Balancer** (which passes the WebSocket straight through),
-> with API keys in **Secrets Manager**, logs in **CloudWatch**, and all networking (VPC,
-> subnets, route tables, security groups) defined in **Terraform** (`infra/app/`).
+> ### ✅ Current status — Phase 3 complete
+> All three planes are live. The **real-time plane** runs the voice loop on **ECS Fargate**
+> behind an **Application Load Balancer** (WebSocket passthrough). The **control plane** is a
+> Next.js founder dashboard on top of **API Gateway → Lambda → DynamoDB/S3** (create studies,
+> publish invite links, read results). The **async plane** fans post-call work out through
+> **SQS → Lambda** (with a **DLQ** + retries) to extract per-question answers, sentiment, and
+> verbatim quotes — idempotently, with the API key fetched from **Secrets Manager** at runtime.
+> All infra is **Terraform** (`infra/app/`); nothing is click-ops.
 > Jump to [What runs today](#what-runs-today) · [Progress](#progress) · [Roadmap](#roadmap).
 
 ---
@@ -37,9 +40,9 @@ earlier phase.
 |:---:|---|:---:|
 | **0** | Local voice loop (mic → STT → LLM → TTS) | ✅ Done |
 | **1** | On AWS — Fargate orchestrator behind an ALB, IaC | ✅ Done |
-| **2** | Memory + control plane — DynamoDB, S3, dashboard | ⬜ Next |
-| **3** | Async pipeline — SQS/EventBridge → Lambda extract | ⬜ Planned |
-| **4** | Synthesis — embeddings + cross-interview themes | ⬜ Planned |
+| **2** | Memory + control plane — DynamoDB, S3, dashboard | ✅ Done |
+| **3** | Async pipeline — SQS → Lambda extract, DLQ | ✅ Done |
+| **4** | Synthesis — embeddings + cross-interview themes | ⬜ Next |
 | **5** | Scale + polish — autoscaling, tracing, demo video | ⬜ Planned |
 
 <details>
@@ -55,6 +58,41 @@ earlier phase.
 </details>
 
 <details>
+<summary><b>Phase 2 — detail</b> (all done)</summary>
+
+- [x] **DynamoDB** — `studies` and `sessions` tables; a `byInviteToken` GSI to resolve a
+  respondent link to its study in one query
+- [x] **Control-plane API** — API Gateway (HTTP) → a single Lambda that routes
+  `POST/GET /studies`, `GET/PATCH /studies/{id}`, `GET /invite/{token}`
+- [x] **Founder dashboard** (Next.js) — create a study (goal + seed questions), publish it,
+  copy the respondent invite link, read session results
+- [x] **Respondent interview page** — token-gated; a live study connects the browser to the
+  orchestrator WebSocket
+- [x] **Orchestrator persistence** — on call-end the transcript is written to **S3** and a
+  session row to DynamoDB, wiring the real-time plane into the control plane
+- [x] Invite tokens are CSPRNG (`secrets.token_urlsafe`), never `random`
+
+</details>
+
+<details>
+<summary><b>Phase 3 — detail</b> (all done)</summary>
+
+- [x] **Producer** — on call-end the orchestrator drops a tiny `{studyId, sessionId}` message
+  on **SQS** (durable data stays in S3/DynamoDB; the message is just a pointer)
+- [x] **Extractor Lambda** — SQS-triggered; pulls the transcript from S3 and asks the LLM for
+  per-question `answers` (paraphrased), `sentiment`, and **verbatim** `quotes`
+- [x] **Idempotent writes** — a single conditional `update_item`
+  (`attribute_not_exists(processedAt)`) so at-least-once redelivery can't double-write
+- [x] **DLQ + retries** — `maxReceiveCount = 3`, then poison messages land in a dead-letter
+  queue; visibility timeout sized to 6× the Lambda timeout
+- [x] **Secrets at runtime** — the API key is fetched from Secrets Manager on cold start, so
+  the plaintext value never enters Terraform state
+- [x] **Guards** — empty transcripts are marked, never sent to the LLM (no fabricated insight);
+  zero third-party deps (raw `urllib`, stdlib only)
+
+</details>
+
+<details>
 <summary><b>Known hardening items</b> (deferred — not Phase 0 blockers)</summary>
 
 - [ ] **Barge-in / interruption** — can't yet cut off the interviewer mid-speech (the
@@ -63,7 +101,8 @@ earlier phase.
   `Ctrl+C`/SIGTERM now exit cleanly (matters on Fargate)
 - [ ] **Echo cancellation** — speakers feed the mic; needs headphones for now
 - [ ] Conversation history grows unbounded (tokens/latency/cost climb each turn)
-- [ ] Interview **topic** is hardcoded — later comes from the founder's study setup
+- [x] Interview **topic** now comes from the founder's study setup (goal + seed questions),
+  not a hardcoded prompt — done in Phase 2
 
 </details>
 
@@ -150,13 +189,23 @@ time allows:
 
 ```
 .
-├── server/               # Phase 0 local backend
-│   ├── main.py           #   FastAPI app: serves the mic page, WebSocket proxy at /ws
+├── server/               # Real-time plane — the session orchestrator (FastAPI)
+│   ├── main.py           #   WS at /ws: mic → STT → LLM → TTS, persist + enqueue on call-end
 │   └── static/
 │       └── processor.js  #   AudioWorklet: captures mic, emits 16 kHz Int16 PCM chunks
+├── control-plane/        # Control plane — API Gateway → Lambda router
+│   └── handler.py        #   POST/GET /studies, GET/PATCH /studies/{id}, GET /invite/{token}
+├── extract/              # Async plane — SQS-triggered extractor Lambda
+│   └── handler.py        #   transcript → LLM → answers/sentiment/quotes, idempotent write
+├── frontend/             # Next.js — founder dashboard + respondent interview page
+│   └── app/
+│       ├── page.tsx              #   studies list
+│       ├── studies/new/          #   create a study
+│       ├── studies/[id]/         #   study detail + invite link + results
+│       └── interview/[token]/    #   token-gated respondent interview
 └── infra/
-    ├── app/             # Phase 1 Terraform: ECR, Secrets Manager, IAM, VPC, Fargate, ALB
-    │   └── main.tf
+    ├── app/             # Terraform: VPC, ECR, Fargate + ALB, DynamoDB, S3, API Gateway,
+    │   └── main.tf      #   control-plane + extractor Lambdas, SQS + DLQ, Secrets Manager
     └── hello/           # First Terraform config (learning): creates one S3 bucket
         ├── main.tf
         └── .terraform.lock.hcl
