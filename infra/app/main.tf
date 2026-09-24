@@ -658,6 +658,12 @@ resource "aws_lambda_event_source_mapping" "extractor_sqs" {
   batch_size       = 1
 }
 
+variable "synthesis_model" {
+  description = "Featherless model for synthesis. Set to a bogus name to test the failure path."
+  type        = string
+  default     = "Qwen/Qwen2.5-7B-Instruct"
+}
+
 locals {
   synthesis_max_receives = 3
   synthesizer_timeout    = 60
@@ -724,6 +730,8 @@ resource "aws_lambda_function" "synthesizer" {
   filename         = data.archive_file.synthesizer.output_path
   source_code_hash = data.archive_file.synthesizer.output_base64sha256
   timeout          = local.synthesizer_timeout
+  # 128 MB used 96 MB on 3 tiny sessions; more memory also buys proportionally more CPU.
+  memory_size = 256
 
   environment {
     variables = {
@@ -731,6 +739,7 @@ resource "aws_lambda_function" "synthesizer" {
       SESSIONS_TABLE       = aws_dynamodb_table.sessions.name
       FIELDWORK_SECRET_ARN = aws_secretsmanager_secret.fieldwork_apis.arn
       MAX_RETRIES          = local.synthesis_max_receives
+      SYNTHESIS_MODEL      = var.synthesis_model
     }
   }
 }

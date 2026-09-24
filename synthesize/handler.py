@@ -13,6 +13,8 @@ sessions_table = dynamodb.Table(os.environ["SESSIONS_TABLE"])
 
 FEATHERLESS_URL = "https://api.featherless.ai/v1/chat/completions"
 TIMEOUT_SECONDS = 35  # Synthesis might take a bit longer than extraction
+# Overridable so a failure can be injected on purpose (terraform -var synthesis_model=...).
+SYNTHESIS_MODEL = os.environ.get("SYNTHESIS_MODEL", "Qwen/Qwen2.5-7B-Instruct")
 
 def _load_featherless_key():
     """Fetch the API key from Secrets Manager once per container (cold start),
@@ -167,7 +169,7 @@ def handler(event, context):
                 synthesis_input += "\n"
 
             req_body = json.dumps({
-                "model": "Qwen/Qwen2.5-7B-Instruct",
+                "model": SYNTHESIS_MODEL,
                 "messages": [
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": synthesis_input}
@@ -218,20 +220,32 @@ def handler(event, context):
                                     if not any(vq["text"] == orig_quote for vq in valid_qs):
                                         valid_qs.append({"text": orig_quote, "sessionId": q_session})
 
-                        # A verified quote proves its session raised this theme, even if
-                        # the model forgot to list it in sessionCitations.
-                        unique_citations = list(set(valid_citations) | {vq["sessionId"] for vq in valid_qs})
-                        if not unique_citations:
-                            continue  # Ignore themes with zero valid citations
-
                         themes.append({
                             "title": str(t.get("title", "Untitled")),
                             "summary": str(t.get("summary", "")),
-                            "sessionCitations": unique_citations,
-                            "sessionCount": len(unique_citations),
+                            "modelCitations": set(valid_citations),
                             "quotes": valid_qs
                         })
-                        
+
+                    def _cited(th):
+                        # A verified quote proves its session raised this theme, even if
+                        # the model forgot to list it in sessionCitations.
+                        return th["modelCitations"] | {q["sessionId"] for q in th["quotes"]}
+
+                    # A quote may support only one theme: small models reuse a strong
+                    # quote under a second, unrelated theme. Walk themes strongest-first
+                    # and keep each quote only where it appears first.
+                    themes.sort(key=lambda th: len(_cited(th)), reverse=True)
+                    used_quotes = set()
+                    for th in themes:
+                        th["quotes"] = [q for q in th["quotes"] if (q["sessionId"], q["text"]) not in used_quotes]
+                        used_quotes.update((q["sessionId"], q["text"]) for q in th["quotes"])
+                        cited = _cited(th)
+                        del th["modelCitations"]
+                        th["sessionCitations"] = sorted(cited)
+                        th["sessionCount"] = len(cited)
+
+                    themes = [th for th in themes if th["sessionCount"] > 0]  # drop themes with no valid citations
                     themes = sorted(themes, key=lambda x: x["sessionCount"], reverse=True)[:5]
                     if not themes:
                         raise ValueError("LLM returned no valid themes")
