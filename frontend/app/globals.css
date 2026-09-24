@@ -315,3 +315,54 @@ textarea {
     transform: rotate(360deg);
   }
 }
+
+/* Themes */
+.themes {
+  list-style: none;
+  padding: 0;
+  margin: 16px 0 0;
+}
+.theme h3 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 18px;
+  margin: 0;
+}
+.theme-rank {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--accent);
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.theme-bar {
+  height: 4px;
+  background: var(--panel-2);
+  border-radius: 2px;
+  margin: 12px 0;
+  overflow: hidden;
+}
+.theme-bar > div {
+  height: 100%;
+  background: var(--accent);
+}
+.theme-quotes {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 0;
+}
+.theme-quotes li + li {
+  margin-top: 10px;
+}
+.theme-quotes blockquote {
+  margin: 0 0 2px;
+  padding-left: 12px;
+  border-left: 2px solid var(--accent);
+  font-style: italic;
+}

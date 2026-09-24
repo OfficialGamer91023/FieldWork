@@ -4,6 +4,7 @@ import { apiFetch, Study } from "../../lib/api";
 import { publishStudy } from "../../actions";
 import InviteLink from "./InviteLink";
 import SynthesisPanel from "./SynthesisPanel";
+import ThemesList from "./ThemesList";
 
 export const dynamic = "force-dynamic";
 
@@ -93,6 +94,8 @@ export default async function StudyDetailPage({
         synthesizedAt={study.synthesizedAt}
         error={study.synthesisError}
       />
+      {/* Absent until the first run finishes; a FAILED run keeps the old themes. */}
+      {study.themes && <ThemesList themes={study.themes} />}
     </>
   );
 }
