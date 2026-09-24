@@ -482,6 +482,19 @@ resource "aws_iam_role_policy" "control_plane_dynamodb" {
   policy = data.aws_iam_policy_document.control_plane_dynamodb.json
 }
 
+data "aws_iam_policy_document" "control_plane_sqs" {
+  statement {
+    actions   = ["sqs:SendMessage"]
+    resources = [aws_sqs_queue.synthesis.arn]
+  }
+}
+
+resource "aws_iam_role_policy" "control_plane_sqs" {
+  name   = "synthesis-enqueue"
+  role   = aws_iam_role.control_plane_lambda.name
+  policy = data.aws_iam_policy_document.control_plane_sqs.json
+}
+
 resource "aws_lambda_function" "control_plane" {
   function_name    = "fieldwork-control-plane"
   role             = aws_iam_role.control_plane_lambda.arn
@@ -492,7 +505,9 @@ resource "aws_lambda_function" "control_plane" {
 
   environment {
     variables = {
-      STUDIES_TABLE = aws_dynamodb_table.studies.name
+      STUDIES_TABLE             = aws_dynamodb_table.studies.name
+      SYNTHESIS_QUEUE_URL       = aws_sqs_queue.synthesis.url
+      SYNTHESIS_STALE_AFTER_SEC = local.synthesis_stale_after_sec
     }
   }
 }
@@ -539,6 +554,12 @@ resource "aws_apigatewayv2_route" "control_plane_publish_study" {
   target    = "integrations/${aws_apigatewayv2_integration.control_plane.id}"
 }
 
+resource "aws_apigatewayv2_route" "control_plane_start_synthesis" {
+  api_id    = aws_apigatewayv2_api.control_plane.id
+  route_key = "POST /studies/{id}/synthesize"
+  target    = "integrations/${aws_apigatewayv2_integration.control_plane.id}"
+}
+
 resource "aws_apigatewayv2_route" "control_plane_get_invite" {
   api_id    = aws_apigatewayv2_api.control_plane.id
   route_key = "GET /invite/{token}"
@@ -559,7 +580,7 @@ data "archive_file" "extractor" {
   output_path = "${path.module}/extractor.zip"
 }
 
-data "aws_iam_policy_document" "extractor_lambda_assume" {
+data "aws_iam_policy_document" "lambda_assume" {
   statement {
     actions = ["sts:AssumeRole"]
     principals {
@@ -571,7 +592,7 @@ data "aws_iam_policy_document" "extractor_lambda_assume" {
 
 resource "aws_iam_role" "extractor_lambda" {
   name               = "fieldwork-extractor-lambda"
-  assume_role_policy = data.aws_iam_policy_document.extractor_lambda_assume.json
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
 }
 
 resource "aws_iam_role_policy_attachment" "extractor_lambda_basic" {
@@ -635,6 +656,114 @@ resource "aws_lambda_event_source_mapping" "extractor_sqs" {
   event_source_arn = aws_sqs_queue.extraction.arn
   function_name    = aws_lambda_function.extractor.arn
   batch_size       = 1
+}
+
+locals {
+  synthesis_max_receives = 3
+  synthesizer_timeout    = 60
+  # AWS guidance: visibility >= 6x the function timeout, so a slow attempt (plus
+  # Lambda's own internal retries) never overlaps a redelivery of the same message.
+  synthesis_visibility_sec = 6 * local.synthesizer_timeout
+  # The worker refreshes synthesisStartedAt on every SQS receive, and a failed
+  # attempt is redelivered at most one visibility timeout later. So a live run's
+  # timestamp is never older than visibility + one run; past that, it's dead.
+  synthesis_stale_after_sec = local.synthesis_visibility_sec + 2 * local.synthesizer_timeout
+}
+
+data "archive_file" "synthesizer" {
+  type        = "zip"
+  source_dir  = "${path.module}/../../synthesize"
+  output_path = "${path.module}/synthesizer.zip"
+  excludes    = ["test_handler.py", "seed.py", "invoke_test.py", "__pycache__"]
+}
+
+resource "aws_iam_role" "synthesizer_lambda" {
+  name               = "fieldwork-synthesizer-lambda"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
+}
+
+resource "aws_iam_role_policy_attachment" "synthesizer_lambda_basic" {
+  role       = aws_iam_role.synthesizer_lambda.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+data "aws_iam_policy_document" "synthesizer_permissions" {
+  statement {
+    actions = [
+      "sqs:ReceiveMessage",
+      "sqs:DeleteMessage",
+      "sqs:GetQueueAttributes"
+    ]
+    resources = [aws_sqs_queue.synthesis.arn]
+  }
+  statement {
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = [aws_secretsmanager_secret.fieldwork_apis.arn]
+  }
+  statement {
+    actions   = ["dynamodb:UpdateItem"]
+    resources = [aws_dynamodb_table.studies.arn]
+  }
+  statement {
+    actions   = ["dynamodb:Query"]
+    resources = [aws_dynamodb_table.sessions.arn]
+  }
+}
+
+resource "aws_iam_role_policy" "synthesizer_permissions" {
+  name   = "synthesizer-permissions"
+  role   = aws_iam_role.synthesizer_lambda.name
+  policy = data.aws_iam_policy_document.synthesizer_permissions.json
+}
+
+resource "aws_lambda_function" "synthesizer" {
+  function_name    = "fieldwork-synthesizer"
+  role             = aws_iam_role.synthesizer_lambda.arn
+  handler          = "handler.handler"
+  runtime          = "python3.13"
+  filename         = data.archive_file.synthesizer.output_path
+  source_code_hash = data.archive_file.synthesizer.output_base64sha256
+  timeout          = local.synthesizer_timeout
+
+  environment {
+    variables = {
+      STUDIES_TABLE        = aws_dynamodb_table.studies.name
+      SESSIONS_TABLE       = aws_dynamodb_table.sessions.name
+      FIELDWORK_SECRET_ARN = aws_secretsmanager_secret.fieldwork_apis.arn
+      MAX_RETRIES          = local.synthesis_max_receives
+    }
+  }
+}
+
+resource "aws_cloudwatch_log_group" "synthesizer" {
+  name              = "/aws/lambda/fieldwork-synthesizer"
+  retention_in_days = 14
+}
+
+resource "aws_sqs_queue" "synthesis_dlq" {
+  name = "fieldwork-synthesis-dlq"
+  # Max retention (14 days) so a dead message is still there when someone looks.
+  message_retention_seconds = 1209600
+}
+
+resource "aws_sqs_queue" "synthesis" {
+  name                       = "fieldwork-synthesis"
+  visibility_timeout_seconds = local.synthesis_visibility_sec
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.synthesis_dlq.arn
+    # Same value the handler reads as MAX_RETRIES, so "final attempt → FAILED"
+    # lines up exactly with "next failure → DLQ".
+    maxReceiveCount = local.synthesis_max_receives
+  })
+}
+
+resource "aws_lambda_event_source_mapping" "synthesizer_sqs" {
+  event_source_arn = aws_sqs_queue.synthesis.arn
+  function_name    = aws_lambda_function.synthesizer.arn
+  batch_size       = 1
+  # Creating the mapping validates that the role can already read the queue;
+  # without this, Terraform may create it before the SQS permissions exist.
+  depends_on = [aws_iam_role_policy.synthesizer_permissions]
 }
 
 output "execution_role_arn" { value = aws_iam_role.execution.arn }

@@ -4,7 +4,7 @@ import uuid
 import secrets
 import boto3
 import decimal
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
@@ -16,6 +16,11 @@ class DecimalEncoder(json.JSONEncoder):
 
 dynamodb = boto3.resource("dynamodb")
 table = dynamodb.Table(os.environ["STUDIES_TABLE"])
+sqs = boto3.client("sqs")
+SYNTHESIS_QUEUE_URL = os.environ["SYNTHESIS_QUEUE_URL"]
+# A PENDING/RUNNING run whose synthesisStartedAt is older than this is dead
+# (the worker only refreshes it on each SQS receive), so a new run may take over.
+SYNTHESIS_STALE_AFTER_SEC = int(os.environ["SYNTHESIS_STALE_AFTER_SEC"])
 
 def handler(event, context):
     """
@@ -34,6 +39,8 @@ def handler(event, context):
         return publish_study(event)
     if route == "GET /invite/{token}":
         return resolve_invite(event)
+    if route == "POST /studies/{id}/synthesize":
+        return start_synthesis(event)
 
     return {
         "statusCode": 404,
@@ -209,4 +216,88 @@ def resolve_invite(event):
         "statusCode": 200,
         "headers": {"Content-Type": "application/json"},
         "body": json.dumps(safe_study, cls=DecimalEncoder)
+    }
+
+
+def start_synthesis(event):
+    """
+    Handles POST /studies/{id}/synthesize — kicks off an async synthesis run.
+    Claims the study (→ PENDING) with a conditional write so a double-click
+    can't start two runs, then hands the work to the synthesis queue. Returns
+    202 immediately; the dashboard polls GET /studies/{id} for the result.
+    """
+    study_id = event.get("pathParameters", {}).get("id")
+    now = datetime.now(timezone.utc)
+    stale_cutoff = (now - timedelta(seconds=SYNTHESIS_STALE_AFTER_SEC)).isoformat()
+
+    try:
+        table.update_item(
+            Key={"studyId": study_id},
+            UpdateExpression="SET #st = :pending, #sa = :now REMOVE #err",
+            # A run may start if the study exists AND it has never been
+            # synthesized, the last run finished, or the in-flight run is stale.
+            ConditionExpression=(
+                "attribute_exists(studyId) AND ("
+                "attribute_not_exists(#st) OR #st IN (:done, :failed) OR #sa < :cutoff)"
+            ),
+            ExpressionAttributeNames={
+                "#st": "synthesisStatus",
+                "#sa": "synthesisStartedAt",
+                "#err": "synthesisError",
+            },
+            ExpressionAttributeValues={
+                ":pending": "PENDING",
+                ":now": now.isoformat(),
+                ":done": "DONE",
+                ":failed": "FAILED",
+                ":cutoff": stale_cutoff,
+            },
+            # On failure, hand back the current item so we can tell
+            # "no such study" (404) from "already running" (409).
+            ReturnValuesOnConditionCheckFailure="ALL_OLD",
+        )
+    except ClientError as e:
+        if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
+        existing = e.response.get("Item")
+        if not existing:
+            return {
+                "statusCode": 404,
+                "headers": {"Content-Type": "application/json"},
+                "body": json.dumps({"error": "study not found"})
+            }
+        return {
+            "statusCode": 409,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps({
+                "error": "synthesis already in progress",
+                "synthesisStatus": existing.get("synthesisStatus", {}).get("S"),
+            })
+        }
+
+    try:
+        sqs.send_message(
+            QueueUrl=SYNTHESIS_QUEUE_URL,
+            MessageBody=json.dumps({"studyId": study_id}),
+        )
+    except Exception as e:
+        # We claimed the study but nothing will ever process it. Release the
+        # claim (FAILED keeps the old themes) instead of leaving it PENDING.
+        print(f"Error enqueueing synthesis for {study_id}: {str(e)}")
+        table.update_item(
+            Key={"studyId": study_id},
+            UpdateExpression="SET #st = :failed, #err = :err",
+            ExpressionAttributeNames={"#st": "synthesisStatus", "#err": "synthesisError"},
+            ExpressionAttributeValues={":failed": "FAILED", ":err": "could not start synthesis"},
+        )
+        return {
+            "statusCode": 503,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps({"error": "could not start synthesis, try again"})
+        }
+
+    return {
+        "statusCode": 202,
+        "headers": {"Content-Type": "application/json"},
+        "body": json.dumps({"studyId": study_id, "synthesisStatus": "PENDING"})
     }
