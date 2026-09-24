@@ -43,3 +43,14 @@ export async function publishStudy(formData: FormData) {
   revalidatePath(`/studies/${id}`);
   revalidatePath("/");
 }
+
+// Kick off an async synthesis run (POST /studies/{id}/synthesize → 202).
+// Returns a result instead of throwing: 409 "already running" is a normal
+// outcome the UI shows inline, not a crash.
+export async function startSynthesis(id: string): Promise<{ ok: boolean; message?: string }> {
+  const res = await apiFetch(`/studies/${id}/synthesize`, { method: "POST" });
+
+  if (res.status === 202) return { ok: true };
+  if (res.status === 409) return { ok: false, message: "A synthesis run is already in progress." };
+  return { ok: false, message: `Could not start synthesis (API returned ${res.status}).` };
+}

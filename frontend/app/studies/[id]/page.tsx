@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { apiFetch, Study } from "../../lib/api";
 import { publishStudy } from "../../actions";
 import InviteLink from "./InviteLink";
+import SynthesisPanel from "./SynthesisPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -83,6 +84,15 @@ export default async function StudyDetailPage({
           </form>
         </>
       )}
+
+      <h2>Themes</h2>
+      <SynthesisPanel
+        studyId={study.studyId}
+        status={study.synthesisStatus}
+        startedAt={study.synthesisStartedAt}
+        synthesizedAt={study.synthesizedAt}
+        error={study.synthesisError}
+      />
     </>
   );
 }

@@ -24,9 +24,27 @@ export type StudySummary = {
   createdAt?: string;
 };
 
+export type SynthesisStatus = "PENDING" | "RUNNING" | "DONE" | "FAILED";
+
+export type ThemeQuote = { text: string; sessionId: string };
+
+export type Theme = {
+  title: string;
+  summary: string;
+  sessionCount: number;
+  sessionCitations: string[];
+  quotes: ThemeQuote[];
+};
+
 export type Study = StudySummary & {
   goal?: string;
   seedQuestions?: string[];
   inviteToken?: string;
   founderId?: string;
+  // Synthesis state lives in its own attributes — `status` is draft/live.
+  synthesisStatus?: SynthesisStatus;
+  synthesisStartedAt?: string;
+  synthesizedAt?: string;
+  synthesisError?: string;
+  themes?: Theme[];
 };
