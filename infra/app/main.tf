@@ -616,6 +616,11 @@ data "aws_iam_policy_document" "extractor_permissions" {
     ]
     resources = [aws_dynamodb_table.sessions.arn]
   }
+  # Read-only: the study's goal + seed questions steer what gets extracted.
+  statement {
+    actions   = ["dynamodb:GetItem"]
+    resources = [aws_dynamodb_table.studies.arn]
+  }
   statement {
     actions   = ["s3:GetObject"]
     resources = ["${aws_s3_bucket.transcripts.arn}/*"]
@@ -632,6 +637,14 @@ resource "aws_iam_role_policy" "extractor_permissions" {
   policy = data.aws_iam_policy_document.extractor_permissions.json
 }
 
+variable "extraction_model" {
+  description = "Featherless model for per-interview extraction."
+  type        = string
+  # Async like synthesis, and it reads the full transcript: a weak read here
+  # can't be recovered downstream, so it gets the big model too.
+  default = "deepseek-ai/DeepSeek-V4.1-Flash"
+}
+
 resource "aws_lambda_function" "extractor" {
   function_name    = "fieldwork-extractor"
   role             = aws_iam_role.extractor_lambda.arn
@@ -643,8 +656,10 @@ resource "aws_lambda_function" "extractor" {
 
   environment {
     variables = {
+      STUDIES_TABLE      = aws_dynamodb_table.studies.name
       SESSIONS_TABLE     = aws_dynamodb_table.sessions.name
       TRANSCRIPTS_BUCKET = aws_s3_bucket.transcripts.bucket
+      EXTRACTION_MODEL   = var.extraction_model
       # Pass only the secret's ARN; the handler fetches the value at runtime
       # via GetSecretValue so the plaintext key never lands in tfstate.
       FIELDWORK_SECRET_ARN = aws_secretsmanager_secret.fieldwork_apis.arn
@@ -656,12 +671,20 @@ resource "aws_lambda_event_source_mapping" "extractor_sqs" {
   event_source_arn = aws_sqs_queue.extraction.arn
   function_name    = aws_lambda_function.extractor.arn
   batch_size       = 1
+  # Featherless budget is 100 concurrency units shared by all three planes.
+  # 5 extractors x 4 units (DeepSeek) = 20 max, so a burst of finished
+  # interviews can never starve live interviews (7B, 1 unit per reply).
+  scaling_config {
+    maximum_concurrency = 5
+  }
 }
 
 variable "synthesis_model" {
   description = "Featherless model for synthesis. Set to a bogus name to test the failure path."
   type        = string
-  default     = "Qwen/Qwen2.5-7B-Instruct"
+  # Synthesis is one off-the-hot-path call per study, so it can afford a far
+  # bigger model than the real-time interview loop (which stays on the 7B).
+  default = "deepseek-ai/DeepSeek-V4.1-Flash"
 }
 
 locals {
@@ -770,6 +793,10 @@ resource "aws_lambda_event_source_mapping" "synthesizer_sqs" {
   event_source_arn = aws_sqs_queue.synthesis.arn
   function_name    = aws_lambda_function.synthesizer.arn
   batch_size       = 1
+  # 2 x 4 units = 8 max (2 is the lowest cap SQS mappings accept).
+  scaling_config {
+    maximum_concurrency = 2
+  }
   # Creating the mapping validates that the role can already read the queue;
   # without this, Terraform may create it before the SQS permissions exist.
   depends_on = [aws_iam_role_policy.synthesizer_permissions]

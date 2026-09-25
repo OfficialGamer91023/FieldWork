@@ -7,12 +7,14 @@ from botocore.exceptions import ClientError
 from datetime import datetime, timezone
 
 dynamodb = boto3.resource("dynamodb")
+studies_table = dynamodb.Table(os.environ["STUDIES_TABLE"])
 sessions_table = dynamodb.Table(os.environ["SESSIONS_TABLE"])
 s3 = boto3.client("s3")
 BUCKET = os.environ["TRANSCRIPTS_BUCKET"]
 
 FEATHERLESS_URL = "https://api.featherless.ai/v1/chat/completions"
 TIMEOUT_SECONDS = 25
+EXTRACTION_MODEL = os.environ.get("EXTRACTION_MODEL", "Qwen/Qwen2.5-7B-Instruct")
 
 
 def _load_featherless_key():
@@ -27,14 +29,17 @@ def _load_featherless_key():
 FEATHERLESS_API_KEY = _load_featherless_key()
 
 SYSTEM_PROMPT = """You are an expert qualitative researcher.
-Analyze the following interview transcript (a dialogue between an Interviewer
-and a User) and extract:
-1. "answers": the key takeaways, written in YOUR OWN words as concise summary
-   points. Paraphrase — do not just copy the user's sentences.
+You will get the study's research goal and seed questions, then an interview
+transcript (a dialogue between an Interviewer and a User). Extract:
+1. "answers": the key takeaways that bear on the research goal, written in YOUR
+   OWN words as concise summary points. Paraphrase — do not just copy the user's
+   sentences.
 2. "sentiment": the User's overall sentiment — exactly one of "positive",
    "negative", "neutral", or "mixed".
-3. "quotes": 1-2 of the User's most revealing statements copied VERBATIM — the
-   User's exact words, word-for-word, never paraphrased or summarized.
+3. "quotes": 1-3 of the User's statements that best answer the research goal,
+   copied VERBATIM — the User's exact words, word-for-word, never paraphrased.
+   Prefer concrete statements (what they did, where they got stuck, why) over
+   filler, greetings, or the User repeating themselves.
 
 Only use content the User actually said. Never invent answers or quotes.
 
@@ -56,6 +61,19 @@ def _parse_insight(content):
         if start != -1 and end != -1 and end > start:
             return json.loads(content[start:end + 1])
         raise
+
+
+def _research_context(study_id):
+    """The study's goal + seed questions, as a header for the LLM. Without it
+    the model picks whatever sounds 'revealing' instead of what the founder
+    asked about. Both fields are optional, so this may return ""."""
+    study = studies_table.get_item(Key={"studyId": study_id}).get("Item") or {}
+    text = ""
+    if study.get("goal"):
+        text += f"Research goal: {study['goal']}\n"
+    if study.get("seedQuestions"):
+        text += "Seed questions:\n" + "".join(f"- {q}\n" for q in study["seedQuestions"])
+    return text
 
 
 def handler(event, context):
@@ -116,7 +134,9 @@ def handler(event, context):
             continue
 
         # Format the transcript into a readable string for the LLM
-        transcript_text = ""
+        transcript_text = _research_context(study_id)
+        if transcript_text:
+            transcript_text += "\nTranscript:\n"
         for msg in transcript_data:
             if msg["role"] == "system": continue
             role = "Interviewer" if msg["role"] == "assistant" else "User"
@@ -124,7 +144,7 @@ def handler(event, context):
 
         # 3. Call Featherless via urllib
         req_body = json.dumps({
-            "model": "Qwen/Qwen2.5-7B-Instruct",  # same model the orchestrator uses on Featherless
+            "model": EXTRACTION_MODEL,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": transcript_text}

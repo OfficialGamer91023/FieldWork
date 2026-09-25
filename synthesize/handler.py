@@ -26,8 +26,8 @@ def _load_featherless_key():
 FEATHERLESS_API_KEY = _load_featherless_key()
 
 SYSTEM_PROMPT = """You are an expert qualitative researcher.
-Analyze the following extracted insights from multiple interview sessions of a single study.
-Synthesize the data into overarching themes. Rank the themes by how many sessions raised them, with the most prevalent theme first. For each theme, provide:
+You will get the study's research goal and seed questions, then the extracted insights from multiple interview sessions of that study.
+Synthesize the data into overarching themes that answer the research goal — group by what users did, needed, or got stuck on, not by how they felt in general. Rank the themes by how many sessions raised them, with the most prevalent theme first. For each theme, provide:
 1. "title": A short, descriptive title for the theme.
 2. "summary": A 2-3 sentence summary of the theme across all sessions.
 3. "sessionCitations": An array of session IDs that contributed to this theme.
@@ -86,9 +86,11 @@ def handler(event, context):
 
         # 1. Mark the run as started
         try:
-            studies_table.update_item(
+            # ALL_NEW hands back the study row, so the goal comes along for free.
+            study = studies_table.update_item(
                 Key={"studyId": study_id},
                 UpdateExpression="SET #status = :running, #startedAt = :now",
+                ReturnValues="ALL_NEW",
                 ConditionExpression="attribute_exists(studyId)",
                 ExpressionAttributeNames={
                     "#status": "synthesisStatus",
@@ -98,7 +100,7 @@ def handler(event, context):
                     ":running": "RUNNING",
                     ":now": datetime.now(timezone.utc).isoformat()
                 }
-            )
+            )["Attributes"]
         except ClientError as e:
             if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
                 print(f"Study {study_id} does not exist. Dropping message.")
@@ -152,6 +154,12 @@ def handler(event, context):
             # 3. The LLM call
             # Send the extracted answers and quotes. Label each block with sessionId
             synthesis_input = ""
+            if study.get("goal"):
+                synthesis_input += f"Research goal: {study['goal']}\n"
+            if study.get("seedQuestions"):
+                synthesis_input += "Seed questions:\n" + "".join(f"- {q}\n" for q in study["seedQuestions"])
+            if synthesis_input:
+                synthesis_input += "\n"
             for s in sessions:
                 s_id = s["sessionId"]
                 answers = s.get("answers", [])
