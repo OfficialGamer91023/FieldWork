@@ -48,7 +48,13 @@ export async function publishStudy(formData: FormData) {
 // Returns a result instead of throwing: 409 "already running" is a normal
 // outcome the UI shows inline, not a crash.
 export async function startSynthesis(id: string): Promise<{ ok: boolean; message?: string }> {
-  const res = await apiFetch(`/studies/${id}/synthesize`, { method: "POST" });
+  let res: Response;
+  try {
+    res = await apiFetch(`/studies/${id}/synthesize`, { method: "POST" });
+  } catch {
+    // fetch throws (not an HTTP status) when the API can't be reached at all.
+    return { ok: false, message: "Couldn't reach the server. Check your connection and try again." };
+  }
 
   if (res.status === 202) return { ok: true };
   if (res.status === 409) return { ok: false, message: "A synthesis run is already in progress." };

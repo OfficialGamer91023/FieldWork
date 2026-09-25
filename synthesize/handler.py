@@ -30,8 +30,14 @@ You will get the study's research goal and seed questions, then the extracted in
 Synthesize the data into overarching themes that answer the research goal — group by what users did, needed, or got stuck on, not by how they felt in general. Rank the themes by how many sessions raised them, with the most prevalent theme first. For each theme, provide:
 1. "title": A short, descriptive title for the theme.
 2. "summary": A 2-3 sentence summary of the theme across all sessions.
-3. "sessionCitations": An array of session IDs that contributed to this theme.
+3. "sessionCitations": An array of session IDs whose insights actually express this theme. Do not cite a session just because it was interviewed.
 4. "quotes": An array of the exact quotes that support this theme, along with the session ID they came from.
+
+Evidence rules:
+- A quote must directly show the theme on its own. If a reader could not see the theme in the quote without your summary, leave it out.
+- Never use a quote that is neutral, off-topic, or contradicts the theme just to fill the list.
+- Use each quote in at most one theme — the one it supports most strongly.
+- An empty "quotes" array is fine when no quote fits. It is better than a weak quote.
 
 Output strictly as JSON with this schema:
 {
@@ -182,7 +188,12 @@ def handler(event, context):
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": synthesis_input}
                 ],
-                "response_format": {"type": "json_object"}
+                "response_format": {"type": "json_object"},
+                # DeepSeek V4.x is a reasoning model: by default it "thinks" for thousands of
+                # tokens first, which made latency 15-40s and sometimes used up the whole
+                # output budget before any JSON (finish_reason=length, empty content).
+                # This task is grouping/quoting, not multi-step reasoning, so turn it off.
+                "chat_template_kwargs": {"thinking": False}
             }).encode('utf-8')
             
             req = urllib.request.Request(FEATHERLESS_URL, data=req_body, method="POST")
@@ -193,7 +204,10 @@ def handler(event, context):
             try:
                 with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as response:
                     result = json.loads(response.read().decode('utf-8'))
-                    insight_str = result["choices"][0]["message"]["content"]
+                    choice = result["choices"][0]
+                    if choice.get("finish_reason") == "length":
+                        raise ValueError("LLM output was cut off at the token limit")
+                    insight_str = choice["message"]["content"]
                     insight = _parse_insight(insight_str)
                     raw_themes = insight.get("themes", [])
                     if not isinstance(raw_themes, list):

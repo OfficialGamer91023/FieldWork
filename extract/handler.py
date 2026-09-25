@@ -149,7 +149,12 @@ def handler(event, context):
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": transcript_text}
             ],
-            "response_format": {"type": "json_object"}
+            "response_format": {"type": "json_object"},
+            # DeepSeek V4.x is a reasoning model: by default it "thinks" for thousands of
+            # tokens first, which made latency 15-40s and sometimes used up the whole
+            # output budget before any JSON (finish_reason=length, empty content).
+            # This task is grouping/quoting, not multi-step reasoning, so turn it off.
+            "chat_template_kwargs": {"thinking": False}
         }).encode('utf-8')
         
         req = urllib.request.Request(FEATHERLESS_URL, data=req_body, method="POST")
@@ -162,7 +167,10 @@ def handler(event, context):
         try:
             with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as response:
                 result = json.loads(response.read().decode('utf-8'))
-                insight_str = result["choices"][0]["message"]["content"]
+                choice = result["choices"][0]
+                if choice.get("finish_reason") == "length":
+                    raise ValueError("LLM output was cut off at the token limit")
+                insight_str = choice["message"]["content"]
                 insight = _parse_insight(insight_str)
         except HTTPError as e:
             print(f"Featherless HTTPError: {e.code} - {e.read().decode('utf-8')}")
