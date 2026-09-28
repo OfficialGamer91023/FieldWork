@@ -1,37 +1,42 @@
+// Mic capture worklet: turns the browser's Float32 audio into 16 kHz Int16 PCM in 50 ms
+// frames (800 samples), which is what the orchestrator and AssemblyAI expect.
+// If the AudioContext couldn't run at 16 kHz (Firefox), it averages down from the
+// context's real rate (`sampleRate` is a global inside worklets).
 class PCMProcessor extends AudioWorkletProcessor {
-    constructor() {
-        super();
-        // 800 samples = ~50ms of audio at 16kHz
-        this.bufferSize = 800;
-        this.buffer = new Float32Array(this.bufferSize);
-        this.bufferIndex = 0;
+  constructor() {
+    super();
+    this.frameSize = 800; // 50 ms at 16 kHz
+    this.ratio = sampleRate / 16000;
+    this.frame = new Int16Array(this.frameSize);
+    this.index = 0;
+    this.acc = 0;
+    this.accCount = 0;
+    this.pos = 0;
+  }
+
+  process(inputs) {
+    const input = inputs[0][0];
+    if (!input) return true;
+
+    for (let i = 0; i < input.length; i++) {
+      this.acc += input[i];
+      this.accCount++;
+      this.pos += 1;
+      if (this.pos < this.ratio) continue;
+      this.pos -= this.ratio;
+
+      const s = Math.max(-1, Math.min(1, this.acc / this.accCount));
+      this.acc = 0;
+      this.accCount = 0;
+      this.frame[this.index++] = s < 0 ? s * 32768 : s * 32767;
+
+      if (this.index === this.frameSize) {
+        this.port.postMessage(this.frame.buffer, [this.frame.buffer]);
+        this.frame = new Int16Array(this.frameSize);
+        this.index = 0;
+      }
     }
-
-    process(inputs, outputs, parameters) {
-        const inputChannelData = inputs[0][0];
-
-        if (!inputChannelData) return true;
-
-        for (let i = 0; i < inputChannelData.length; i++) {
-            this.buffer[this.bufferIndex++] = inputChannelData[i];
-
-            // When the buffer hits the target size...
-            if (this.bufferIndex >= this.bufferSize) {
-                // Convert the Float32 buffer to Int16
-                const int16Buffer = new Int16Array(this.bufferSize);
-                for (let j = 0; j < this.bufferSize; j++) {
-                    let s = Math.max(-1, Math.min(1, this.buffer[j]));
-                    int16Buffer[j] = s < 0 ? s * 32768 : s * 32767;
-                }
-
-                // Send the binary chunk back to the main thread
-                this.port.postMessage(int16Buffer.buffer);
-
-                // Reset the buffer
-                this.bufferIndex = 0;
-            }
-        }
-        return true; // Keep processor alive
-    }
+    return true;
+  }
 }
-registerProcessor('pcm-processor', PCMProcessor);
+registerProcessor("pcm-processor", PCMProcessor);

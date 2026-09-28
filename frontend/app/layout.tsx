@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import SiteHeader from "./SiteHeader";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Fieldwork",
-  description: "Automated adaptive voice user-interviews for founders.",
+  title: "Fieldwork: voice user interviews that synthesize themselves",
+  description:
+    "An AI interviewer holds adaptive voice conversations with your users, then ranks the themes across every interview, each backed by the exact quotes.",
 };
 
 export default function RootLayout({
@@ -15,16 +16,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        <header className="site-header">
-          <div className="container">
-            <Link href="/" className="brand">
-              Fieldwork
-            </Link>
-            <Link href="/studies/new" className="btn">
-              New study
-            </Link>
-          </div>
-        </header>
+        <SiteHeader />
         <main className="container">{children}</main>
       </body>
     </html>
