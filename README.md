@@ -85,8 +85,8 @@ participant stops talking
   → Polly streams 16 kHz PCM → WebSocket → browser schedules it gap-free
 ```
 
-Measured locally with a scripted participant: **about 1.0–1.2 s** from AssemblyAI's
-end-of-turn to the first audio byte (LLM first token ~0.7 s, Polly first audio ~0.25 s).
+Measured locally with a scripted participant: **about 1–2 s** from AssemblyAI's
+end-of-turn to the first audio byte (LLM first token ~0.8–1.5 s, Polly first audio ~0.25 s).
 
 What keeps it feeling like a conversation:
 - **Barge-in:** partial transcripts cancel the in-flight LLM and TTS task, and an `interrupt`
@@ -138,7 +138,8 @@ trusted to the LLM:
 | Area | Choice |
 |---|---|
 | Speech-to-text | AssemblyAI Universal-3 Pro Streaming (WebSocket) |
-| Interview LLM | Featherless (OpenAI-compatible): Qwen2.5-7B-Instruct, falling back to DeepSeek-V4.1-Flash |
+| Interview LLM | Featherless (OpenAI-compatible): Gemma 4 26B-A4B, falling back to Qwen3.8-Flash-Next. Picked by benchmarking 24 open models on our own prompts |
+| Note-taker LLM | Qwen3.8-Flash-Next: grades topic coverage after every answer |
 | Analysis LLM | DeepSeek-V4.1-Flash (thinking off) for extraction and synthesis |
 | Voice | Amazon Polly generative engine, streamed PCM |
 | Real-time compute | FastAPI on ECS Fargate (ARM64) behind ALB + CloudFront |

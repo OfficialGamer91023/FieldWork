@@ -44,13 +44,18 @@ app = FastAPI()
 
 ASSEMBLY_API_KEY = os.environ["ASSEMBLY_API"]
 FEATHERLESS_API_KEY = os.environ["FEATHERLESS_API"]
-INTERVIEW_MODEL = os.environ.get("INTERVIEW_MODEL", "Qwen/Qwen2.5-7B-Instruct")
-FALLBACK_MODEL = os.environ.get("FALLBACK_MODEL", "deepseek-ai/DeepSeek-V4.1-Flash")
+# Picked by benchmark (2026-09-28): fastest first token with clean one-question replies,
+# and the fastest note-taker that matched every hand label.
+INTERVIEW_MODEL = os.environ.get("INTERVIEW_MODEL", "google/gemma-4-26B-A4B-it")
+FALLBACK_MODEL = os.environ.get("FALLBACK_MODEL", "Qwen/Qwen3.8-Flash-Next")
 FIRST_TOKEN_TIMEOUT = float(os.environ.get("FIRST_TOKEN_TIMEOUT", "4"))
 COVERAGE_MODEL = os.environ.get("COVERAGE_MODEL", FALLBACK_MODEL)
 MAX_USER_TURNS = int(os.environ.get("MAX_USER_TURNS", "14"))
 POLLY_VOICE = os.environ.get("POLLY_VOICE", "Matthew")
 MAX_SESSION_SEC = int(os.environ.get("MAX_SESSION_SEC", "1200"))
+# Hybrid reasoning models (Qwen3.x, DeepSeek) think before answering unless told not to, which
+# would eat the latency budget. Each chat template reads its own key and ignores the other.
+NO_THINKING = {"chat_template_kwargs": {"enable_thinking": False, "thinking": False}}
 # Comma-separated list of browser origins allowed to open an interview socket. Empty = any.
 ALLOWED_ORIGINS = {o.strip().rstrip("/") for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()}
 
@@ -276,8 +281,7 @@ class Session:
                         stream=True,
                         max_tokens=200,
                         temperature=0.6,
-                        # DeepSeek is a reasoning model; thinking would eat the latency budget.
-                        extra_body={"chat_template_kwargs": {"thinking": False}} if "DeepSeek" in model else None,
+                        extra_body=NO_THINKING,
                     )
                     chunks = aiter(stream)
                     first = ""
@@ -411,7 +415,7 @@ class Session:
                     messages=[{"role": "user", "content": prompt}],
                     max_tokens=150,
                     temperature=0,
-                    extra_body={"chat_template_kwargs": {"thinking": False}} if "DeepSeek" in COVERAGE_MODEL else None,
+                    extra_body=NO_THINKING,
                 )
             raw = resp.choices[0].message.content or ""
             data = json.loads(re.search(r"\{.*\}", raw, re.S).group(0))
