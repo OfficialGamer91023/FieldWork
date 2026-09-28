@@ -48,7 +48,10 @@ FEATHERLESS_API_KEY = os.environ["FEATHERLESS_API"]
 # and the fastest note-taker that matched every hand label.
 INTERVIEW_MODEL = os.environ.get("INTERVIEW_MODEL", "google/gemma-4-26B-A4B-it")
 FALLBACK_MODEL = os.environ.get("FALLBACK_MODEL", "Qwen/Qwen3.8-Flash-Next")
-FIRST_TOKEN_TIMEOUT = float(os.environ.get("FIRST_TOKEN_TIMEOUT", "4"))
+# After this long with no words, the fallback model races the original request (see llm_text).
+FIRST_TOKEN_TIMEOUT = float(os.environ.get("FIRST_TOKEN_TIMEOUT", "2.5"))
+# If neither model has said anything by now, apologise instead of leaving the line silent.
+REPLY_DEADLINE = float(os.environ.get("REPLY_DEADLINE", "12"))
 COVERAGE_MODEL = os.environ.get("COVERAGE_MODEL", FALLBACK_MODEL)
 MAX_USER_TURNS = int(os.environ.get("MAX_USER_TURNS", "14"))
 POLLY_VOICE = os.environ.get("POLLY_VOICE", "Matthew")
@@ -74,6 +77,12 @@ END_MARKER = "[END]"
 MIN_TURNS_BEFORE_END = 3
 AAI_MIN_CHUNK = 1600  # 50 ms of 16 kHz Int16 audio
 KICKOFF = "[The participant has joined the call. Greet them and ask your first question.]"
+# The opening line needs no model: it's always hello + the first seed question. A fixed line starts
+# playing in well under a second, where a cold model can take 4+ s and the participant talks first.
+GREETING = (
+    "Hi, thanks for joining! I'm an AI interviewer, and there are no right or wrong answers here, "
+    "I just want to hear about your own experience. {question}"
+)
 SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 COVERAGE_RANK = {"no": 0, "partial": 1, "done": 2}
 # "I want to leave" can't wait a turn for the note-taker, so catch the obvious phrasings
@@ -170,7 +179,10 @@ class Session:
         self.session_id = uuid.uuid4().hex
         self.system_prompt = build_system_prompt(study)
         self.goal = study.get("goal", "")
-        self.topics = [q for q in study.get("seedQuestions", []) if q.strip()] or [self.goal or "the research goal"]
+        seeds = [q.strip() for q in study.get("seedQuestions", []) if q.strip()]
+        self.topics = seeds or [self.goal or "the research goal"]
+        self.greeting = GREETING.format(question=seeds[0]) if seeds else None  # None: the model greets
+        self.warmup_task: asyncio.Task | None = None
         self.coverage = ["no"] * len(self.topics)  # per seed question: no / partial / done
         self.wants_to_stop = False
         self.coverage_task: asyncio.Task | None = None
@@ -220,7 +232,10 @@ class Session:
         try:
             buf = ""
             asked = False
-            replies = self.llm_text(self.steered_messages(reason))
+            if self.greeting and self.messages[-1]["content"] == KICKOFF:
+                replies = self.fixed_text(self.greeting)
+            else:
+                replies = self.llm_text(self.steered_messages(reason))
             try:
                 async for text in replies:
                     buf += text
@@ -264,46 +279,96 @@ class Session:
                 with contextlib.suppress(Exception):
                     await self.set_state("listening")
 
+    async def fixed_text(self, text: str):
+        """Same shape as llm_text, for lines we don't need a model to write."""
+        yield text
+
+    async def warm_up(self):
+        """While the greeting plays, send the interview model a one-token request so a cold start
+        (seen at 4+ s) lands here instead of on the first real reply."""
+        with contextlib.suppress(Exception):
+            async with asyncio.timeout(20):
+                await CLIENT.chat.completions.create(
+                    model=INTERVIEW_MODEL, messages=self.messages[:2], max_tokens=1, extra_body=NO_THINKING
+                )
+
+    async def open_stream(self, model: str, messages: list[dict]):
+        """Start a streamed completion and wait for its first words. Returns (stream, chunks, first),
+        or None if the model finished without saying anything."""
+        stream = await CLIENT.chat.completions.create(
+            model=model,
+            messages=messages,
+            stream=True,
+            max_tokens=200,
+            temperature=0.6,
+            extra_body=NO_THINKING,
+        )
+        try:
+            chunks = aiter(stream)
+            first = ""
+            while not first:
+                chunk = await anext(chunks)
+                first = chunk.choices[0].delta.content if chunk.choices else ""
+            return stream, chunks, first
+        except StopAsyncIteration:
+            await stream.close()
+            return None
+        except BaseException:
+            await stream.close()
+            raise
+
     async def llm_text(self, messages: list[dict]):
-        """Stream the reply's text. If the first words don't arrive within FIRST_TOKEN_TIMEOUT,
-        give up on that model and retry once on the fallback, so a provider hiccup costs a
-        few seconds instead of a dead-air interview."""
+        """Stream the reply's text. If the first words don't arrive within FIRST_TOKEN_TIMEOUT, the
+        fallback model races the original request and whichever speaks first wins, so one slow
+        provider costs a few seconds instead of dead air. After REPLY_DEADLINE we give up."""
         loop = asyncio.get_running_loop()
-        for attempt, model in enumerate((INTERVIEW_MODEL, FALLBACK_MODEL)):
-            last = attempt == 1
-            started = loop.time()
-            stream = None
-            try:
-                async with asyncio.timeout(None if last else FIRST_TOKEN_TIMEOUT):
-                    stream = await CLIENT.chat.completions.create(
-                        model=model,
-                        messages=messages,
-                        stream=True,
-                        max_tokens=200,
-                        temperature=0.6,
-                        extra_body=NO_THINKING,
-                    )
-                    chunks = aiter(stream)
-                    first = ""
-                    while not first:
-                        chunk = await anext(chunks)
-                        first = chunk.choices[0].delta.content if chunk.choices else ""
-            except TimeoutError:
-                print(f"[{self.session_id}] {model} slow (> {FIRST_TOKEN_TIMEOUT}s to first token), retrying")
-                if stream is not None:
-                    await stream.close()
-                continue
-            except StopAsyncIteration:
-                return
-            print(f"[{self.session_id}] llm first token {loop.time() - started:.2f}s ({model})")
-            try:
-                yield first
-                async for chunk in chunks:
-                    if chunk.choices and chunk.choices[0].delta.content:
-                        yield chunk.choices[0].delta.content
-            finally:
-                await stream.close()
+        started = loop.time()
+        racers = {asyncio.create_task(self.open_stream(INTERVIEW_MODEL, messages), name=INTERVIEW_MODEL)}
+        hedged = False
+        winner = None
+        try:
+            while racers and winner is None:
+                wait = FIRST_TOKEN_TIMEOUT if not hedged else REPLY_DEADLINE - (loop.time() - started)
+                if wait <= 0:
+                    raise TimeoutError(f"no reply within {REPLY_DEADLINE}s")
+                done, racers = await asyncio.wait(racers, timeout=wait, return_when=asyncio.FIRST_COMPLETED)
+                if not done and not hedged:
+                    print(f"[{self.session_id}] {INTERVIEW_MODEL} slow (> {FIRST_TOKEN_TIMEOUT}s), racing {FALLBACK_MODEL}")
+                    racers.add(asyncio.create_task(self.open_stream(FALLBACK_MODEL, messages), name=FALLBACK_MODEL))
+                    hedged = True
+                    continue
+                for task in done:
+                    if task.exception() is not None:
+                        print(f"[{self.session_id}] {task.get_name()} failed: {task.exception()!r}")
+                    elif winner is None:
+                        winner = task
+                    elif task.result() is not None:
+                        await task.result()[0].close()  # both answered at once; keep one
+                if winner is None and not racers:
+                    if not hedged:  # the primary errored out fast: give the fallback its turn
+                        racers.add(asyncio.create_task(self.open_stream(FALLBACK_MODEL, messages), name=FALLBACK_MODEL))
+                        hedged = True
+                    elif any(t.exception() is None for t in done):
+                        return  # a model finished with nothing to say
+                    else:
+                        raise next(iter(done)).exception()
+        finally:
+            for task in racers:
+                task.cancel()
+                with contextlib.suppress(BaseException):
+                    await task
+        result = winner.result()
+        if result is None:
             return
+        stream, chunks, first = result
+        print(f"[{self.session_id}] llm first token {loop.time() - started:.2f}s ({winner.get_name()})")
+        try:
+            yield first
+            async for chunk in chunks:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+        finally:
+            await stream.close()
 
     async def speak(self, sentence: str, spoken: list[str]):
         if END_MARKER in sentence:
@@ -579,6 +644,10 @@ async def websocket_endpoint(websocket: WebSocket):
     print(f"[{session.session_id}] interview started for study {session.study_id}")
     status = "aborted"
 
+    # Greet right away: don't make the participant sit through the STT handshake in silence.
+    session.start_reply()
+    if session.greeting:
+        session.warmup_task = asyncio.create_task(session.warm_up())
     try:
         async with connect_to_assemblyai() as aai_ws:
 
@@ -620,7 +689,6 @@ async def websocket_endpoint(websocket: WebSocket):
                         break
                 raise EndInterview()  # STT side closed, nothing more we can hear
 
-            session.start_reply()  # the interviewer speaks first
             try:
                 async with asyncio.timeout(MAX_SESSION_SEC):
                     async with asyncio.TaskGroup() as tg:
@@ -640,8 +708,9 @@ async def websocket_endpoint(websocket: WebSocket):
     except* Exception as eg:
         print(f"[{session.session_id}] session error: {eg.exceptions!r}")
     finally:
-        if session.coverage_task and not session.coverage_task.done():
-            session.coverage_task.cancel()
+        for task in (session.coverage_task, session.warmup_task):
+            if task and not task.done():
+                task.cancel()
         if session.reply_task and not session.reply_task.done():
             session.reply_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):

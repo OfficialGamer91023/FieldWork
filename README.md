@@ -62,7 +62,7 @@ REAL-TIME PLANE (latency-critical, long-lived, stateful)
   Participant browser ── wss ──▶ CloudFront ─▶ ALB (CloudFront-only) ─▶ ECS Fargate orchestrator
      mic: AudioWorklet → 16 kHz PCM                                        │
      speaker: gap-free PCM player, flushed on barge-in                     ├─▶ AssemblyAI Universal-3 Pro Streaming
-                                                                           ├─▶ LLM (Featherless, streamed, 4 s watchdog → fallback model)
+                                                                           ├─▶ LLM (Featherless, streamed, 2.5 s → fallback races it)
                                                                            └─▶ Amazon Polly generative voice (streamed PCM)
                                           on hang-up: transcript → S3, session → DynamoDB, {studyId, sessionId} → SQS
 
@@ -97,8 +97,12 @@ What keeps it feeling like a conversation:
   playback), so it works on laptop speakers without headphones.
 - **One question per turn:** the reply stops after its first question even if the model
   stacks several.
-- **Provider hiccups:** if the model hasn't produced a token in 4 s, the request is
-  abandoned and retried on a fallback model. If Polly fails, that sentence falls back to
+- **Instant greeting:** the opening line is fixed (hello plus the first seed question), so it
+  plays about 0.4 s after connecting instead of waiting on a model. A one-token warm-up request
+  wakes the interview model while the greeting plays.
+- **Provider hiccups:** if the model hasn't produced a token in 2.5 s, a fallback model races
+  the original request and whichever speaks first wins. After 12 s with nothing, the
+  interviewer apologises instead of leaving dead air. If Polly fails, that sentence falls back to
   the browser's voice.
 - **Natural ending, driven by the research goal:** after every answer a note-taker model
   (running alongside the reply, so it adds no latency) marks each seed question as
