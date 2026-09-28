@@ -1,287 +1,196 @@
 # Fieldwork
 
-**Automated, adaptive voice user-interviews for founders.**
+**Voice user interviews that synthesize themselves.**
 
 <p>
-  <img alt="status" src="https://img.shields.io/badge/status-Phase%203%20complete-brightgreen">
   <img alt="hackathon" src="https://img.shields.io/badge/AssemblyAI-Voice%20Agent%20Hackathon-6a5acd">
-  <img alt="python" src="https://img.shields.io/badge/Python-3.14-3776ab">
-  <img alt="license" src="https://img.shields.io/badge/scope-solo%20project-lightgrey">
+  <img alt="stt" src="https://img.shields.io/badge/STT-Universal--3%20Pro%20Streaming-2b6cb0">
+  <img alt="infra" src="https://img.shields.io/badge/AWS-Fargate%20%C2%B7%20Lambda%20%C2%B7%20SQS%20%C2%B7%20DynamoDB-ff9900">
+  <img alt="iac" src="https://img.shields.io/badge/IaC-Terraform-7b42bc">
 </p>
 
-A founder defines a research goal and a handful of seed questions. Fieldwork then runs
-real, *adaptive* voice interviews with their users — it asks follow-ups instead of reading
-a fixed script — and **synthesizes themes across all interviews** into a dashboard. The
-output isn't 50 transcripts; it's *"4 ranked themes, with the exact quotes that support
-each one."*
+A founder writes down what they want to learn and a few seed questions, then shares one link.
+Every user who opens it has a real spoken conversation with an AI interviewer. It asks
+follow-ups instead of reading a script, and you can interrupt it mid-sentence. When the
+interviews are in, Fieldwork ranks the themes that came up across all of them. Every theme
+is backed by the participants' exact words, and each quote links to the line of the
+transcript it came from.
 
-Built for the **AssemblyAI Voice Agent Hackathon** (Sep 2026). Solo project, learning-first:
-the goal is to learn AWS and distributed-systems design by building each piece by hand
-rather than reaching for an all-in-one API.
+The output isn't fifty transcripts. It's *"4 ranked themes, and here's who said what."*
 
-> ### ✅ Current status — Phase 3 complete
-> All three planes are live. The **real-time plane** runs the voice loop on **ECS Fargate**
-> behind an **Application Load Balancer** (WebSocket passthrough). The **control plane** is a
-> Next.js founder dashboard on top of **API Gateway → Lambda → DynamoDB/S3** (create studies,
-> publish invite links, read results). The **async plane** fans post-call work out through
-> **SQS → Lambda** (with a **DLQ** + retries) to extract per-question answers, sentiment, and
-> verbatim quotes — idempotently, with the API key fetched from **Secrets Manager** at runtime.
-> All infra is **Terraform** (`infra/app/`); nothing is click-ops.
-> Jump to [What runs today](#what-runs-today) · [Progress](#progress) · [Roadmap](#roadmap).
+**Demo video:** _add link_ · **Live app:** _add link_ · Built solo for the AssemblyAI Voice Agent Hackathon (September 2026).
 
 ---
 
-## Progress
+## What it does
 
-Each phase leaves a working, demoable system, so a time slip just means submitting an
-earlier phase.
+**For the founder (dashboard)**
+1. Create a study with a research goal and seed questions, then publish it to get an invite link.
+2. Watch interviews arrive. Each one is analysed a few seconds after the call ends: key
+   takeaways, sentiment and verbatim quotes.
+3. Click **Synthesize** to get up to 5 themes, ranked by how many interviews raised them.
+   Click any quote to jump to the highlighted line in its transcript.
 
-| Phase | What it delivers | Status |
-|:---:|---|:---:|
-| **0** | Local voice loop (mic → STT → LLM → TTS) | ✅ Done |
-| **1** | On AWS — Fargate orchestrator behind an ALB, IaC | ✅ Done |
-| **2** | Memory + control plane — DynamoDB, S3, dashboard | ✅ Done |
-| **3** | Async pipeline — SQS → Lambda extract, DLQ | ✅ Done |
-| **4** | Synthesis — embeddings + cross-interview themes | ⬜ Next |
-| **5** | Scale + polish — autoscaling, tracing, demo video | ⬜ Planned |
+**For the participant (interview page)**
+- No account or install. Open the link, allow the mic and talk.
+- The interviewer greets you, asks one question at a time, digs into specifics ("walk me
+  through the last time that happened"), and wraps up by itself once the goal is covered.
+- Talk over it and it stops and listens (barge-in). Live captions show what it heard.
 
-<details>
-<summary><b>Phase 0 — detail</b> (all done)</summary>
+## How AssemblyAI is used
 
-- [x] Browser mic capture via `AudioWorklet` → 16 kHz mono **Int16 PCM** chunks
-- [x] WebSocket backend that **proxies** audio to AssemblyAI streaming STT
-- [x] Live transcripts, with `end_of_turn` as the turn-taking signal
-- [x] LLM interviewer (Featherless / Qwen2.5-7B), OpenAI-compatible + swappable
-- [x] Per-connection conversation history → **adaptive** multi-turn follow-ups
-- [x] TTS reply via browser `SpeechSynthesis` — full spoken loop closed
+The real-time plane uses **Universal-3 Pro Streaming** over WebSocket
+(`speech_model=universal-3-6-pro`, `mode=balanced`). We run our own orchestration on top:
 
-</details>
-
-<details>
-<summary><b>Phase 2 — detail</b> (all done)</summary>
-
-- [x] **DynamoDB** — `studies` and `sessions` tables; a `byInviteToken` GSI to resolve a
-  respondent link to its study in one query
-- [x] **Control-plane API** — API Gateway (HTTP) → a single Lambda that routes
-  `POST/GET /studies`, `GET/PATCH /studies/{id}`, `GET /invite/{token}`
-- [x] **Founder dashboard** (Next.js) — create a study (goal + seed questions), publish it,
-  copy the respondent invite link, read session results
-- [x] **Respondent interview page** — token-gated; a live study connects the browser to the
-  orchestrator WebSocket
-- [x] **Orchestrator persistence** — on call-end the transcript is written to **S3** and a
-  session row to DynamoDB, wiring the real-time plane into the control plane
-- [x] Invite tokens are CSPRNG (`secrets.token_urlsafe`), never `random`
-
-</details>
-
-<details>
-<summary><b>Phase 3 — detail</b> (all done)</summary>
-
-- [x] **Producer** — on call-end the orchestrator drops a tiny `{studyId, sessionId}` message
-  on **SQS** (durable data stays in S3/DynamoDB; the message is just a pointer)
-- [x] **Extractor Lambda** — SQS-triggered; pulls the transcript from S3 and asks the LLM for
-  per-question `answers` (paraphrased), `sentiment`, and **verbatim** `quotes`
-- [x] **Idempotent writes** — a single conditional `update_item`
-  (`attribute_not_exists(processedAt)`) so at-least-once redelivery can't double-write
-- [x] **DLQ + retries** — `maxReceiveCount = 3`, then poison messages land in a dead-letter
-  queue; visibility timeout sized to 6× the Lambda timeout
-- [x] **Secrets at runtime** — the API key is fetched from Secrets Manager on cold start, so
-  the plaintext value never enters Terraform state
-- [x] **Guards** — empty transcripts are marked, never sent to the LLM (no fabricated insight);
-  zero third-party deps (raw `urllib`, stdlib only)
-
-</details>
-
-<details>
-<summary><b>Known hardening items</b> (deferred — tracked, not phase blockers)</summary>
-
-- [ ] **Barge-in / interruption** — can't yet cut off the interviewer mid-speech (the
-  real-time-plane hard problem)
-- [x] **Graceful shutdown** — structured teardown via `asyncio.TaskGroup` + `receive_bytes`;
-  `Ctrl+C`/SIGTERM now exit cleanly (matters on Fargate)
-- [ ] **Echo cancellation** — speakers feed the mic; needs headphones for now
-- [ ] Conversation history grows unbounded (tokens/latency/cost climb each turn)
-- [x] Interview **topic** now comes from the founder's study setup (goal + seed questions),
-  not a hardcoded prompt — done in Phase 2
-
-</details>
-
----
-
-## The core idea: three planes
-
-The system is deliberately split into three planes with very different constraints. Keeping
-them separate is the central design decision.
-
-| Plane | Purpose | Constraint | Compute style |
-|---|---|---|---|
-| **Control** | Founder sets up studies, reads results | CRUD, low traffic | REST + serverless / DB |
-| **Real-time** | The live interview | Latency-critical, long-lived, stateful | Long-running container |
-| **Async** | Post-call extraction + synthesis | Throughput, bursty, fan-out | Serverless workers |
-
-A voice call is a long-lived, stateful connection — a poor fit for Lambda's 15-minute cap
-and cold starts, which is exactly *why* containers exist. The post-call jobs are short,
-stateless, and bursty — Lambda's sweet spot. Building both is the point.
+| Streaming feature | What Fieldwork does with it |
+|---|---|
+| `end_of_turn` on `Turn` messages | The turn-taking signal. The LLM runs the moment a participant finishes. |
+| `min_turn_silence` = 560 ms, `max_turn_silence` = 2400 ms | Tuned for interviews: people pause to think mid-answer, so we wait longer than a support bot would before taking the turn. |
+| Partial `Turn` transcripts | **Barge-in.** A partial of two or more words while the interviewer is thinking or speaking cancels the reply and flushes the browser's audio queue. |
+| Formatted final transcripts | Stored as the transcript of record. The quotes shown on the dashboard are checked against this text. |
 
 ## Architecture
 
-`✅` = built and deployed today · `⬜` = planned (Phase 4–5). The shape is the target
-design; the markers show how far the build has actually reached.
+Three planes with very different constraints, kept deliberately separate:
 
 ```
-CONTROL PLANE
-  Founder ─▶ Next.js dashboard                          ✅ (local dev; ⬜ CloudFront+S3 hosting)
-              └▶ API Gateway (HTTP) ─▶ Lambda router     ✅   ⬜ Cognito auth (founderId stubbed)
-                    └▶ DynamoDB (studies, sessions)      ✅   ⬜ computed themes
+CONTROL PLANE (CRUD, low traffic)
+  Founder ─▶ Next.js on Vercel ─(server-side only)─▶ API Gateway (HTTP API, throttled)
+                                                      └▶ Lambda router ─▶ DynamoDB + S3
 
-REAL-TIME PLANE  (latency-critical)
-  Respondent browser (WebAudio mic capture)             ✅
-      │ audio frames over WebSocket
-      ▼
-  Application Load Balancer  (HTTP/WS passthrough)       ✅
-      ▼
-  Session Orchestrator  (ECS Fargate, long-lived)       ✅   ◀── we own the orchestration:
-      ├─ audio  ─▶ AssemblyAI Realtime STT               ✅  ─▶ transcripts + endpointing
-      ├─ turn text ─▶ LLM (Featherless)                  ✅  ─▶ next adaptive follow-up
-      ├─ reply text ─▶ TTS: SpeechSynthesis ✅ → Polly / ElevenLabs ⬜ ─▶ audio to browser
-      ├─ turn-taking / endpointing ✅ · barge-in ⬜ (cancel in-flight LLM+TTS)
-      └─ live session state in-process ✅  (⬜ Redis/ElastiCache when we scale out)
-      │ on CALL END: transcript → S3, enqueue {studyId, sessionId} → SQS
-      ▼
-  S3 (transcript) ✅   +   SQS message ✅   (⬜ raw audio, ⬜ EventBridge)
+REAL-TIME PLANE (latency-critical, long-lived, stateful)
+  Participant browser ── wss ──▶ CloudFront ─▶ ALB (CloudFront-only) ─▶ ECS Fargate orchestrator
+     mic: AudioWorklet → 16 kHz PCM                                        │
+     speaker: gap-free PCM player, flushed on barge-in                     ├─▶ AssemblyAI Universal-3 Pro Streaming
+                                                                           ├─▶ LLM (Featherless, streamed, 4 s watchdog → fallback model)
+                                                                           └─▶ Amazon Polly generative voice (streamed PCM)
+                                          on hang-up: transcript → S3, session → DynamoDB, {studyId, sessionId} → SQS
 
-ASYNC PLANE  (throughput, fan-out)
-  SQS (+ retries, DLQ)                                   ✅
-      ├─ Lambda: Extract   (answers, sentiment, quotes → DynamoDB)      ✅
-      ├─ Lambda: Embed     (vectors → OpenSearch / pgvector)            ⬜ Phase 4
-      └─ Lambda: Synthesize (cluster answers → ranked themes → DynamoDB)⬜ Phase 4
-              └▶ dashboard reads results (back to Control Plane)        ✅ (themes ⬜)
-
-Cross-cutting: CloudWatch ✅ · Secrets Manager ✅ · Terraform ✅ · OpenTelemetry ⬜ · GitHub Actions ⬜
+ASYNC PLANE (bursty, throughput, fan-out)
+  SQS extraction ─▶ Lambda extractor ─▶ takeaways, sentiment, verbatim quotes (idempotent write)   + DLQ
+  Founder clicks Synthesize ─▶ API ─▶ SQS synthesis ─▶ Lambda synthesizer ─▶ ranked themes on the study row + DLQ
 ```
 
-### The two hard problems (with deliberate fallbacks)
+A voice call is a long-lived stateful socket, a poor fit for Lambda, so the orchestrator
+is a container. Post-call work is short, stateless and bursty, which is exactly what
+Lambda is for. The queue between them means a slow LLM never holds up a live call, and a
+failed extraction retries by itself and ends up in a dead-letter queue instead of vanishing.
 
-Scope is guarded by building the "dumb but working" version first and upgrading only if
-time allows:
+### The real-time loop
 
-- **Adaptive interviewing** — if follow-ups are dumb, it's a survey with extra steps.
-  *Fallback:* seed questions + one LLM-generated follow-up each. *Upgrade:* multi-turn
-  probing driven by the running transcript.
-- **Cross-interview synthesis** — theme clustering across N interviews can eat a week.
-  *Fallback:* a single LLM pass that summarizes all transcripts for a study into themes.
-  *Upgrade:* embeddings + vector clustering, then incremental re-clustering as each
-  interview completes.
+```
+participant stops talking
+  → AssemblyAI end_of_turn
+  → LLM streams the reply; each finished sentence goes to Polly immediately
+  → Polly streams 16 kHz PCM → WebSocket → browser schedules it gap-free
+```
+
+Measured locally with a scripted participant: **about 1.0–1.2 s** from AssemblyAI's
+end-of-turn to the first audio byte (LLM first token ~0.7 s, Polly first audio ~0.25 s).
+
+What keeps it feeling like a conversation:
+- **Barge-in:** partial transcripts cancel the in-flight LLM and TTS task, and an `interrupt`
+  message makes the browser drop every queued audio buffer. What the interviewer actually
+  said before being cut off is recorded, flagged `interrupted`.
+- **Echo guard:** the browser runs echo cancellation, and the server also ignores
+  "speech" that is mostly the interviewer's own words (with a short grace window after
+  playback), so it works on laptop speakers without headphones.
+- **One question per turn:** the reply stops after its first question even if the model
+  stacks several.
+- **Provider hiccups:** if the model hasn't produced a token in 4 s, the request is
+  abandoned and retried on a fallback model. If Polly fails, that sentence falls back to
+  the browser's voice.
+- **Natural ending, driven by the research goal:** after every answer a note-taker model
+  (running alongside the reply, so it adds no latency) marks each seed question as
+  `done` / `partial` / `no`. Each reply gets a private note steering the interviewer toward
+  what's still uncovered. Once everything is `done`, the orchestrator (not the
+  interview model) turns the next reply into a goodbye and hangs up. "I have to run" is caught
+  instantly by a phrase check, so the goodbye doesn't wait for the note-taker. The participant sees
+  "2 of 4 topics covered", and the dashboard shows each interview's coverage and why it ended.
+  Turn and time caps keep a rambling call bounded.
+
+### Evidence you can trust
+
+The whole pitch is "themes backed by exact quotes", so quotes are verified in code, not
+trusted to the LLM:
+- The extractor only keeps quotes the participant said verbatim.
+- The synthesizer keeps a quote under a theme only if **(a)** it matches a stored quote
+  from that interview and **(b)** the model also cited that interview for that theme.
+  Each quote is kept under one theme only (the strongest), `sessionCount` is computed
+  from citations, and unknown session ids are dropped.
+- Every quote on the dashboard deep-links to its transcript line and is highlighted there.
+
+### Reliability details
+
+- **Idempotent consumers:** the extractor writes with `attribute_not_exists(processedAt)`,
+  so SQS's at-least-once redelivery can't double-write.
+- **Synthesis state machine** on the study row (`PENDING → RUNNING → DONE | FAILED`), with a
+  conditional write against double-clicks, stale-run takeover after 480 s, and old themes
+  kept when a run fails. The dashboard polls the row instead of holding a request open,
+  so API Gateway's 30 s limit never matters.
+- **Secrets** live in Secrets Manager: injected into the Fargate task by ECS, and fetched at
+  runtime by the Lambdas, so they never enter Terraform state or the repo.
+- **Least privilege:** the ALB accepts only CloudFront's origin-facing IP ranges; each
+  Lambda and the task role get only the tables, queues and actions they use.
 
 ## Tech stack
 
-`✅` in use today · `⬜` planned.
-
-- **Frontend:** Next.js — founder dashboard + respondent interview page ✅
-- **Real-time compute:** ECS Fargate — a session orchestrator (FastAPI) that holds the
-  WebSocket and owns turn-taking, the LLM call, and TTS ✅ (barge-in ⬜)
-- **STT:** AssemblyAI Realtime Speech-to-Text (WebSocket) ✅
-- **LLM:** Featherless (OpenAI-compatible, swappable) — Qwen2.5-7B-Instruct ✅
-- **TTS:** pluggable — browser `SpeechSynthesis` ✅ → AWS Polly / ElevenLabs Flash v2.5 ⬜
-- **Async:** SQS + Lambda ✅ (extract). Embed + synthesize workers ⬜; EventBridge ⬜
-- **Data:** DynamoDB (studies/sessions) ✅ · S3 (transcripts) ✅ · OpenSearch or pgvector
-  (embeddings) ⬜ · ElastiCache/Redis (live session state) ⬜
-- **Platform:** Secrets Manager ✅ · CloudWatch ✅ · Cognito ⬜ · OpenTelemetry ⬜ · GitHub Actions ⬜
-- **Language:** Python (orchestrator + Lambdas); TypeScript (Next.js). **IaC:** Terraform (HCL) ✅
-- **Region / runtime:** `us-east-1`; Lambdas on `python3.13`
+| Area | Choice |
+|---|---|
+| Speech-to-text | AssemblyAI Universal-3 Pro Streaming (WebSocket) |
+| Interview LLM | Featherless (OpenAI-compatible): Qwen2.5-7B-Instruct, falling back to DeepSeek-V4.1-Flash |
+| Analysis LLM | DeepSeek-V4.1-Flash (thinking off) for extraction and synthesis |
+| Voice | Amazon Polly generative engine, streamed PCM |
+| Real-time compute | FastAPI on ECS Fargate (ARM64) behind ALB + CloudFront |
+| Async | SQS (+ DLQs) → Lambda (Python 3.13) |
+| Data | DynamoDB (studies, sessions), S3 (transcripts) |
+| Frontend | Next.js 15 (App Router, server actions) on Vercel |
+| Platform | Terraform, Secrets Manager, CloudWatch Logs |
 
 ## Repository layout
 
 ```
-.
-├── server/               # Real-time plane — the session orchestrator (FastAPI)
-│   ├── main.py           #   WS at /ws: mic → STT → LLM → TTS, persist + enqueue on call-end
-│   └── static/
-│       └── processor.js  #   AudioWorklet: captures mic, emits 16 kHz Int16 PCM chunks
-├── control-plane/        # Control plane — API Gateway → Lambda router
-│   └── handler.py        #   POST/GET /studies, GET/PATCH /studies/{id}, GET /invite/{token}
-├── extract/              # Async plane — SQS-triggered extractor Lambda
-│   └── handler.py        #   transcript → LLM → answers/sentiment/quotes, idempotent write
-├── frontend/             # Next.js — founder dashboard + respondent interview page
-│   └── app/
-│       ├── page.tsx              #   studies list
-│       ├── studies/new/          #   create a study
-│       ├── studies/[id]/         #   study detail + invite link + results
-│       └── interview/[token]/    #   token-gated respondent interview
-└── infra/
-    ├── app/             # Terraform: VPC, ECR, Fargate + ALB, DynamoDB, S3, API Gateway,
-    │   └── main.tf      #   control-plane + extractor Lambdas, SQS + DLQ, Secrets Manager
-    └── hello/           # First Terraform config (learning): creates one S3 bucket
-        ├── main.tf
-        └── .terraform.lock.hcl
+server/          Real-time plane: session orchestrator (FastAPI, WebSocket /ws)
+control-plane/   Control plane: API Gateway → Lambda router (studies, invites, sessions, synthesis)
+extract/         Async plane: per-interview extractor Lambda (SQS-triggered)
+synthesize/      Async plane: cross-interview synthesizer Lambda (SQS-triggered)
+frontend/        Next.js dashboard + participant interview page
+infra/app/       Terraform for everything on AWS (single state)
+infra/up.sh      One-shot bring-up: ECR + secret → image → everything else
 ```
 
-> Terraform state (`*.tfstate`) and the downloaded provider binaries (`.terraform/`) are
-> gitignored — state can contain secrets and the binaries are large and platform-specific.
-> Run `terraform init` to fetch providers locally.
+## Running it
 
-## What runs today
+**Prerequisites:** AWS CLI (logged in), Terraform ≥ 1.6, Docker, Node 20+, Python 3.13+,
+and keys for AssemblyAI and Featherless in a root `.env`:
 
-All three planes are built and have been verified end-to-end on AWS. Everything below is
-Terraform in `infra/app/`.
+```
+ASSEMBLY_API=...
+FEATHERLESS_API=...
+```
 
-**Control plane — `frontend/` + `control-plane/`.** The founder opens the Next.js dashboard,
-creates a study (goal + seed questions), and publishes it. Publishing mints a CSPRNG invite
-token and flips the study `live`. The dashboard talks to **API Gateway → a single Lambda
-router → DynamoDB**, and later reads each session's extracted results back from the same rows.
+**Deploy the backend (≈10 min, most of it CloudFront):**
 
-**Real-time plane — `server/`.** A respondent opens their invite link; the page connects to
-the orchestrator WebSocket (locally `ws://localhost:8000/ws`, in AWS through the ALB):
+```bash
+./infra/up.sh     # prints CONTROL_PLANE_API_URL and NEXT_PUBLIC_ORCHESTRATOR_WS_URL
+```
 
-1. An `AudioWorklet` (`static/processor.js`) captures the mic and streams raw **16 kHz mono
-   Int16 PCM** chunks over the socket.
-2. The FastAPI orchestrator runs two concurrent loops in an `asyncio.TaskGroup` — one
-   forwarding audio to **AssemblyAI streaming STT**, the other reading back `Turn` messages.
-3. On `end_of_turn`, the utterance is appended to a per-connection history and sent to the
-   **LLM interviewer** (Featherless), primed with the study's goal + seed questions. The reply
-   goes back over the WebSocket and the browser speaks it via **`SpeechSynthesis`** —
-   closing the loop *mic → STT → LLM → TTS → speaker.*
-4. On call-end the transcript is written to **S3**, a session row to **DynamoDB**, and a
-   `{studyId, sessionId}` message is dropped on **SQS**.
+**Frontend:** set those two variables plus `NEXT_PUBLIC_APP_URL` on Vercel (root directory
+`frontend/`), or put them in `frontend/.env.local` and run `npm run dev`.
+Optionally pass `-var allowed_origins=https://your-app.vercel.app` to Terraform so only your
+frontend can open interview sockets.
 
-**Async plane — `extract/`.** That SQS message triggers the extractor Lambda: it reads the
-transcript from S3, asks the LLM for paraphrased `answers`, a `sentiment`, and **verbatim**
-`quotes`, and writes them back onto the session row with a conditional `update_item` so a
-duplicate delivery can't double-write. Failures retry up to 3× before landing in a DLQ; the
-LLM API key is fetched from **Secrets Manager** at cold start.
+**Run the orchestrator locally** against the deployed tables: add `STUDIES_TABLE`,
+`SESSIONS_TABLE`, `TRANSCRIPTS_BUCKET` and `EXTRACTION_QUEUE_URL` to `.env`, then
+`uvicorn main:app --port 8000` from `server/`.
 
-> 🎧 Use headphones for the live interview. Without them the speakers feed the mic and the
-> interviewer transcribes and replies to its own voice (echo cancellation is a deferred item).
+**Tear down:** `terraform -chdir=infra/app destroy`.
 
-**`infra/hello/`** — a first Terraform config that provisions a single S3 bucket. It exists to
-learn the Terraform init/plan/apply loop, not because the app needs it.
+## What's next
 
-> 💡 **Cost note:** the `infra/app/` stack is torn down (`terraform destroy`) between work
-> sessions to stay inside a ~$5 budget. The Secrets Manager value is hard-deleted, so a
-> rebuild re-runs `terraform apply`, re-puts the API keys from `.env`, and repoints the
-> frontend at the fresh API Gateway URL.
-
-## Roadmap
-
-Each phase leaves a working, demoable system — a time slip just means submitting an
-earlier phase.
-
-- **Phase 0 — local voice loop** *(✅ complete).* Browser mic → AssemblyAI STT → LLM → TTS
-  → audio back. Full real-time loop proven locally. *(Interruption/barge-in deferred.)*
-- **Phase 1 — on AWS** *(✅ complete).* Containerize the orchestrator → ECS Fargate, front
-  with an Application Load Balancer (WebSocket passthrough). IaC from day one.
-- **Phase 2 — memory + control plane** *(✅ complete).* DynamoDB (studies/sessions), S3
-  (transcripts), founder dashboard, respondent study links.
-- **Phase 3 — async pipeline** *(✅ complete).* On call-end enqueue to SQS → Lambda extract
-  (per-question answers, sentiment, verbatim quotes). Idempotent writes, retries + DLQ.
-- **Phase 4 — synthesis** *(next).* Embeddings + vector store, cross-interview theme
-  clustering (fallback: single LLM pass; upgrade: incremental clustering).
-- **Phase 5 — scale + polish.** Autoscaling for many concurrent calls, distributed
-  tracing, then the demo video and submission write-up.
-
-## Conventions
-
-- **IaC for everything** — no click-ops for anything that should be reproducible.
-- **Secrets** live in Secrets Manager / env — never in code or committed files.
-- Keep the three planes in separate modules/services; don't let control-plane CRUD leak
-  into the latency-critical real-time path.
+- Real sign-in with Cognito. Founder identity is a single demo account today; the
+  `byFounder` index already supports it.
+- Automatic re-synthesis as interviews arrive (EventBridge Scheduler sweep), instead of a button.
+- Embedding-based clustering for studies with hundreds of interviews. Today it's a single
+  LLM pass, which is fine at tens.
+- Phone-call interviews over SIP for users who won't click a link.

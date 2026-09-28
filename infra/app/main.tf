@@ -25,9 +25,16 @@ data "aws_iam_policy_document" "ecs_task_assume_role" {
   }
 }
 
-variable "allowed_ip" {
-  description = "Your public IP (with /32) allowed to reach the task for smoke testing"
+variable "allowed_origins" {
+  description = "Comma-separated browser origins allowed to open interview sockets (e.g. https://fieldwork.vercel.app). Empty = any."
   type        = string
+  default     = ""
+}
+
+variable "polly_voice" {
+  description = "Amazon Polly generative voice for the interviewer"
+  type        = string
+  default     = "Matthew"
 }
 
 resource "aws_ecr_repository" "orchestrator" {
@@ -93,6 +100,11 @@ data "aws_iam_policy_document" "task_permissions" {
     actions   = ["sqs:SendMessage"]
     resources = [aws_sqs_queue.extraction.arn]
   }
+  statement {
+    # Polly has no per-voice resource ARNs; the action is the whole permission.
+    actions   = ["polly:SynthesizeSpeech"]
+    resources = ["*"]
+  }
 }
 
 resource "aws_iam_role_policy" "task_permissions" {
@@ -156,6 +168,14 @@ resource "aws_ecs_task_definition" "orchestrator" {
         {
           name  = "EXTRACTION_QUEUE_URL"
           value = aws_sqs_queue.extraction.url
+        },
+        {
+          name  = "ALLOWED_ORIGINS"
+          value = var.allowed_origins
+        },
+        {
+          name  = "POLLY_VOICE"
+          value = var.polly_voice
         }
       ]
 
@@ -293,11 +313,11 @@ resource "aws_security_group" "alb" {
   name   = "fieldwork-alb-sg"
   vpc_id = aws_vpc.main.id
 
-  ingress { # who can reach the ALB
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = [var.allowed_ip] # keep it to your IP for now; open to 0.0.0.0/0 later
+  ingress { # only CloudFront's edge servers can reach the ALB; browsers go through CloudFront
+    from_port       = 80
+    to_port         = 80
+    protocol        = "tcp"
+    prefix_list_ids = [data.aws_ec2_managed_prefix_list.cloudfront.id]
   }
   egress {
     from_port   = 0
@@ -306,6 +326,10 @@ resource "aws_security_group" "alb" {
     cidr_blocks = ["0.0.0.0/0"]
   }
   tags = { Name = "fieldwork-alb-sg" }
+}
+
+data "aws_ec2_managed_prefix_list" "cloudfront" {
+  name = "com.amazonaws.global.cloudfront.origin-facing"
 }
 
 resource "aws_lb" "main" {
@@ -321,6 +345,8 @@ resource "aws_lb_target_group" "orchestrator" {
   protocol    = "HTTP"
   vpc_id      = aws_vpc.main.id
   target_type = "ip"
+  # Interviews in flight get this long to finish when a new image replaces the task.
+  deregistration_delay = 60
 
   health_check {
     path    = "/"
@@ -474,6 +500,15 @@ data "aws_iam_policy_document" "control_plane_dynamodb" {
       "${aws_dynamodb_table.studies.arn}/index/*"
     ]
   }
+  statement {
+    # Read-only on interviews: the dashboard lists them and opens transcripts.
+    actions   = ["dynamodb:Query", "dynamodb:GetItem"]
+    resources = [aws_dynamodb_table.sessions.arn]
+  }
+  statement {
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.transcripts.arn}/transcripts/*"]
+  }
 }
 
 resource "aws_iam_role_policy" "control_plane_dynamodb" {
@@ -506,6 +541,8 @@ resource "aws_lambda_function" "control_plane" {
   environment {
     variables = {
       STUDIES_TABLE             = aws_dynamodb_table.studies.name
+      SESSIONS_TABLE            = aws_dynamodb_table.sessions.name
+      TRANSCRIPTS_BUCKET        = aws_s3_bucket.transcripts.bucket
       SYNTHESIS_QUEUE_URL       = aws_sqs_queue.synthesis.url
       SYNTHESIS_STALE_AFTER_SEC = local.synthesis_stale_after_sec
     }
@@ -521,6 +558,12 @@ resource "aws_apigatewayv2_stage" "control_plane_default" {
   api_id      = aws_apigatewayv2_api.control_plane.id
   name        = "$default"
   auto_deploy = true
+
+  # No auth yet (Cognito is post-hackathon), so cap what a leaked URL can cost.
+  default_route_settings {
+    throttling_burst_limit = 20
+    throttling_rate_limit  = 10
+  }
 }
 
 resource "aws_apigatewayv2_integration" "control_plane" {
@@ -545,6 +588,18 @@ resource "aws_apigatewayv2_route" "control_plane_get_studies" {
 resource "aws_apigatewayv2_route" "control_plane_get_study" {
   api_id    = aws_apigatewayv2_api.control_plane.id
   route_key = "GET /studies/{id}"
+  target    = "integrations/${aws_apigatewayv2_integration.control_plane.id}"
+}
+
+resource "aws_apigatewayv2_route" "control_plane_list_sessions" {
+  api_id    = aws_apigatewayv2_api.control_plane.id
+  route_key = "GET /studies/{id}/sessions"
+  target    = "integrations/${aws_apigatewayv2_integration.control_plane.id}"
+}
+
+resource "aws_apigatewayv2_route" "control_plane_get_session" {
+  api_id    = aws_apigatewayv2_api.control_plane.id
+  route_key = "GET /studies/{id}/sessions/{sessionId}"
   target    = "integrations/${aws_apigatewayv2_integration.control_plane.id}"
 }
 
@@ -806,3 +861,57 @@ output "execution_role_arn" { value = aws_iam_role.execution.arn }
 output "task_role_arn" { value = aws_iam_role.task.arn }
 output "alb_dns_name" { value = aws_lb.main.dns_name }
 output "control_plane_api_url" { value = aws_apigatewayv2_stage.control_plane_default.invoke_url }
+# ---- Public front door for the real-time plane -------------------------------------------
+# Browsers load the dashboard over HTTPS (Vercel), so the interview socket must be wss://.
+# CloudFront gives us TLS on *.cloudfront.net without owning a domain, and passes WebSocket
+# upgrades straight through to the ALB. Nothing is cached.
+data "aws_cloudfront_cache_policy" "disabled" {
+  name = "Managed-CachingDisabled"
+}
+
+data "aws_cloudfront_origin_request_policy" "all_viewer" {
+  name = "Managed-AllViewer" # forwards Sec-WebSocket-* headers, Origin and the ?token= query
+}
+
+resource "aws_cloudfront_distribution" "orchestrator" {
+  enabled         = true
+  comment         = "Fieldwork orchestrator (interview WebSocket)"
+  price_class     = "PriceClass_100"
+  is_ipv6_enabled = true
+
+  origin {
+    origin_id   = "alb"
+    domain_name = aws_lb.main.dns_name
+    custom_origin_config {
+      http_port              = 80
+      https_port             = 443
+      origin_protocol_policy = "http-only" # TLS ends at CloudFront; the ALB only accepts CloudFront
+      origin_ssl_protocols   = ["TLSv1.2"]
+      origin_read_timeout    = 60
+    }
+  }
+
+  default_cache_behavior {
+    target_origin_id         = "alb"
+    viewer_protocol_policy   = "https-only"
+    allowed_methods          = ["GET", "HEAD", "OPTIONS"]
+    cached_methods           = ["GET", "HEAD"]
+    cache_policy_id          = data.aws_cloudfront_cache_policy.disabled.id
+    origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer.id
+    compress                 = false
+  }
+
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
+
+  viewer_certificate {
+    cloudfront_default_certificate = true
+  }
+}
+
+output "orchestrator_ws_url" {
+  value = "wss://${aws_cloudfront_distribution.orchestrator.domain_name}"
+}
