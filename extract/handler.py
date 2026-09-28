@@ -1,3 +1,4 @@
+import re
 import json
 import os
 import urllib.request
@@ -49,6 +50,27 @@ Output strictly as JSON with this schema:
     "sentiment": "mixed",
     "quotes": ["the user's exact words"]
 }"""
+
+def _normalize(text):
+    """Compare text the way a reader would: ignore case, punctuation and spacing."""
+    text = str(text).lower().replace("\u2019", "'").replace("\u2018", "'")
+    return " ".join(re.sub(r"[^a-z0-9' ]+", " ", text).split())
+
+
+def _verbatim_quotes(quotes, transcript_data):
+    """Keep only quotes the participant actually said. The model is told to copy words
+    exactly; this is where we check it did, since every quote on the dashboard claims to be
+    someone's real words."""
+    said = [_normalize(m.get("content", "")) for m in transcript_data if m.get("role") == "user"]
+    kept = []
+    for q in quotes if isinstance(quotes, list) else []:
+        nq = _normalize(q) if isinstance(q, str) else ""
+        if nq and any(nq in line for line in said):
+            kept.append(q.strip())
+        else:
+            print(f"Dropping non-verbatim quote: {q!r}")
+    return kept
+
 
 def _parse_insight(content):
     """Small models sometimes wrap JSON in ```fences``` or add a sentence of
@@ -198,7 +220,7 @@ def handler(event, context):
                 ExpressionAttributeValues={
                     ":a": insight.get("answers", []),
                     ":s": insight.get("sentiment", "neutral"),
-                    ":q": insight.get("quotes", []),
+                    ":q": _verbatim_quotes(insight.get("quotes", []), transcript_data),
                     ":p": datetime.now(timezone.utc).isoformat()
                 }
             )

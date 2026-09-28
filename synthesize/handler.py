@@ -236,7 +236,10 @@ def handler(event, context):
                                 continue
                             q_text = q.get("text")
                             q_session = q.get("sessionId")
-                            if q_session in valid_session_ids:
+                            # Two independent signals must agree: the model cited this
+                            # session for THIS theme, and the quote exists verbatim in it.
+                            # A quote alone no longer drags an unrelated interview in.
+                            if q_session in valid_citations:
                                 orig_quote = valid_quotes_map.get((q_session, _normalize(q_text)))
                                 if orig_quote:
                                     if not any(vq["text"] == orig_quote for vq in valid_qs):
@@ -250,9 +253,8 @@ def handler(event, context):
                         })
 
                     def _cited(th):
-                        # A verified quote proves its session raised this theme, even if
-                        # the model forgot to list it in sessionCitations.
-                        return th["modelCitations"] | {q["sessionId"] for q in th["quotes"]}
+                        # Every surviving quote's session is already cited (see above).
+                        return th["modelCitations"]
 
                     # A quote may support only one theme: small models reuse a strong
                     # quote under a second, unrelated theme. Walk themes strongest-first
