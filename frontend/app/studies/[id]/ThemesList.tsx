@@ -1,8 +1,9 @@
-import type { Theme } from "../../lib/api";
+import Link from "next/link";
+import { shortId, type Theme } from "../../lib/api";
 
 // Server component: pure rendering of what's on the study row. It updates
 // during a run because SynthesisPanel's router.refresh() re-renders the page.
-export default function ThemesList({ themes }: { themes: Theme[] }) {
+export default function ThemesList({ studyId, themes }: { studyId: string; themes: Theme[] }) {
   if (themes.length === 0) {
     return <p className="hint mt-4">No completed interviews to synthesize yet.</p>;
   }
@@ -32,7 +33,12 @@ export default function ThemesList({ themes }: { themes: Theme[] }) {
               {theme.quotes.map((q, j) => (
                 <li key={j}>
                   <blockquote>“{q.text}”</blockquote>
-                  <span className="hint">Interview {q.sessionId.slice(0, 6)}</span>
+                  <Link
+                    className="hint quote-source"
+                    href={`/studies/${studyId}/sessions/${q.sessionId}?q=${encodeURIComponent(q.text)}#quote`}
+                  >
+                    Interview {shortId(q.sessionId)} · see in transcript →
+                  </Link>
                 </li>
               ))}
             </ul>

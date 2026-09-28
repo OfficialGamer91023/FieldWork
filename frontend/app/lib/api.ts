@@ -48,3 +48,47 @@ export type Study = StudySummary & {
   synthesisError?: string;
   themes?: Theme[];
 };
+
+export type Sentiment = "positive" | "negative" | "neutral" | "mixed" | "n/a";
+
+// One interview as the dashboard lists it (the transcript stays in S3 until opened).
+export type SessionSummary = {
+  sessionId: string;
+  endedAt?: string;
+  turnCount?: number;
+  status?: "completed" | "aborted";
+  // How many seed questions the live note-taker judged answered, and why the call ended.
+  topicsCovered?: number;
+  topicsTotal?: number;
+  endReason?: "goal_covered" | "participant_stopped" | "participant_hung_up" | "turn_cap" | "time_cap" | "unknown";
+  // Filled in by the async extractor a few seconds after the call ends.
+  processedAt?: string;
+  sentiment?: Sentiment;
+  answers?: string[];
+  quotes?: string[];
+};
+
+export type TranscriptLine = {
+  role: "user" | "assistant";
+  content: string;
+  at?: string;
+  interrupted?: boolean;
+};
+
+export type SessionDetail = SessionSummary & { transcript: TranscriptLine[] };
+
+export function shortId(id: string) {
+  return id.slice(0, 6);
+}
+
+export function formatWhen(iso?: string) {
+  if (!iso) return "";
+  return new Date(iso).toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: "UTC",
+    timeZoneName: "short",
+  });
+}

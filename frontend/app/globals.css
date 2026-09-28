@@ -366,3 +366,307 @@ textarea {
   border-left: 2px solid var(--accent);
   font-style: italic;
 }
+
+/* Interview: intro, orb, transcript bubbles */
+.eyebrow {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  margin: 0 0 6px;
+}
+.lede {
+  color: var(--muted);
+  max-width: 520px;
+  margin: 8px auto 20px;
+}
+.interview-facts {
+  list-style: none;
+  padding: 0;
+  margin: 0 auto 24px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+.interview-facts li {
+  font-size: 13px;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 12px;
+}
+.orb {
+  --level: 0;
+  --orb: var(--muted);
+  width: 120px;
+  height: 120px;
+  margin: 28px auto 8px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #ffffff33, transparent 60%), var(--orb);
+  transform: scale(calc(1 + var(--level) * 0.25));
+  box-shadow: 0 0 calc(12px + var(--level) * 60px) color-mix(in srgb, var(--orb) 55%, transparent);
+  transition: background-color 0.3s, transform 0.08s linear;
+}
+.orb.speaking {
+  --orb: var(--accent);
+}
+.orb.listening {
+  --orb: var(--green);
+}
+.orb.thinking,
+.orb.connecting {
+  --orb: var(--amber);
+  animation: orb-breathe 1.4s ease-in-out infinite;
+}
+@keyframes orb-breathe {
+  50% {
+    opacity: 0.55;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .orb {
+    transform: none;
+    animation: none !important;
+  }
+}
+.turn.user {
+  background: var(--panel-2);
+  margin-left: 40px;
+}
+.turn.agent {
+  margin-right: 40px;
+}
+.turn.user .who {
+  color: var(--green);
+}
+.turn.partial {
+  opacity: 0.6;
+}
+
+/* Interviews list + transcript viewer */
+.sessions {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 0;
+  display: grid;
+  gap: 8px;
+}
+.session-row {
+  display: block;
+  color: var(--text);
+}
+.session-row:hover {
+  text-decoration: none;
+  border-color: var(--accent);
+}
+.session-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+.session-gist {
+  margin: 8px 0 0;
+  font-size: 14px;
+  color: var(--muted);
+}
+.badge.sentiment.positive {
+  color: var(--green);
+  border-color: var(--green);
+}
+.badge.sentiment.negative {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.badge.sentiment.mixed {
+  color: var(--amber);
+  border-color: var(--amber);
+}
+.quote-source {
+  display: inline-block;
+  margin-top: 2px;
+}
+.turn.highlight {
+  border-color: var(--amber);
+  box-shadow: 0 0 0 3px rgba(224, 165, 59, 0.2);
+  scroll-margin-top: 80px;
+}
+mark {
+  background: rgba(224, 165, 59, 0.35);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
+/* Landing */
+.hero {
+  margin-bottom: 12px;
+}
+.hero h1 {
+  font-size: 34px;
+  line-height: 1.15;
+}
+.lede-left {
+  color: var(--muted);
+  font-size: 17px;
+  max-width: 600px;
+  margin: 10px 0 24px;
+}
+.how {
+  list-style: none;
+  counter-reset: step;
+  padding: 0;
+  margin: 0 0 12px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.how li {
+  counter-increment: step;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: grid;
+  gap: 4px;
+  font-size: 14px;
+}
+.how li::before {
+  content: counter(step);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+}
+.how span {
+  color: var(--muted);
+}
+@media (max-width: 640px) {
+  .how {
+    grid-template-columns: 1fr;
+  }
+  .hero h1 {
+    font-size: 28px;
+  }
+  .turn.user {
+    margin-left: 16px;
+  }
+  .turn.agent {
+    margin-right: 16px;
+  }
+}
+
+/* Live interview: the conversation scrolls inside its own box, not the page */
+.convo {
+  position: relative;
+  flex: 1;
+  min-height: 200px;
+  display: flex;
+  flex-direction: column;
+  margin-top: 20px;
+  text-align: left;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.convo-head {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.convo-body {
+  flex: 1;
+  min-height: 0; /* lets the flex child shrink so it scrolls instead of growing */
+  overflow-y: auto;
+  overscroll-behavior: contain; /* reaching the end doesn't start scrolling the page */
+  padding: 14px 14px 6px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  /* soft fade at the top edge so older lines scroll away under it */
+  mask-image: linear-gradient(to bottom, transparent 0, #000 18px);
+}
+.convo-body .turn {
+  background: var(--bg);
+}
+.convo-body .turn.user {
+  background: var(--panel-2);
+}
+.convo-empty {
+  color: var(--muted);
+  font-size: 14px;
+  text-align: center;
+  margin-top: 18%;
+}
+.convo-jump {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+.convo-jump:hover {
+  border-color: var(--accent);
+}
+/* The live screen is exactly one window tall; the conversation box takes what's left.
+   96px = site header + its margin, 16px = bottom breathing room. */
+.interview-stage.live {
+  display: flex;
+  flex-direction: column;
+  height: calc(100dvh - 112px);
+  padding: 0;
+}
+.interview-stage.live h1 {
+  margin: 0;
+}
+.interview-stage.live .orb {
+  flex-shrink: 0;
+  margin: 18px auto 6px;
+}
+.interview-stage.live .btn {
+  align-self: center;
+  flex-shrink: 0;
+}
+main:has(.interview-stage.live) {
+  padding-bottom: 16px;
+}
+
+/* Live interview: how many seed topics the note-taker has seen answered */
+.topic-progress {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: -12px 0 16px;
+  font-size: 12px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.topic-bar {
+  width: 120px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+.topic-bar span {
+  display: block;
+  height: 100%;
+  background: var(--green);
+  transition: width 0.6s ease;
+}

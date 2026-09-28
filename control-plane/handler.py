@@ -16,6 +16,9 @@ class DecimalEncoder(json.JSONEncoder):
 
 dynamodb = boto3.resource("dynamodb")
 table = dynamodb.Table(os.environ["STUDIES_TABLE"])
+sessions_table = dynamodb.Table(os.environ["SESSIONS_TABLE"])
+s3 = boto3.client("s3")
+TRANSCRIPTS_BUCKET = os.environ["TRANSCRIPTS_BUCKET"]
 sqs = boto3.client("sqs")
 SYNTHESIS_QUEUE_URL = os.environ["SYNTHESIS_QUEUE_URL"]
 # A PENDING/RUNNING run whose synthesisStartedAt is older than this is dead
@@ -41,6 +44,10 @@ def handler(event, context):
         return resolve_invite(event)
     if route == "POST /studies/{id}/synthesize":
         return start_synthesis(event)
+    if route == "GET /studies/{id}/sessions":
+        return list_sessions(event)
+    if route == "GET /studies/{id}/sessions/{sessionId}":
+        return get_session(event)
 
     return {
         "statusCode": 404,
@@ -301,3 +308,61 @@ def start_synthesis(event):
         "headers": {"Content-Type": "application/json"},
         "body": json.dumps({"studyId": study_id, "synthesisStatus": "PENDING"})
     }
+
+
+def _json(status, body):
+    return {
+        "statusCode": status,
+        "headers": {"Content-Type": "application/json"},
+        "body": json.dumps(body, cls=DecimalEncoder),
+    }
+
+
+# Per-interview fields the dashboard lists; the transcript itself stays in S3.
+SESSION_SUMMARY_FIELDS = (
+    "sessionId", "endedAt", "turnCount", "status", "sentiment", "processedAt", "answers", "quotes",
+    "topicsCovered", "topicsTotal", "endReason",
+)
+
+
+def list_sessions(event):
+    """
+    Handles GET /studies/{id}/sessions: every interview of a study, newest first.
+    """
+    study_id = event.get("pathParameters", {}).get("id")
+    items, kwargs = [], {"KeyConditionExpression": Key("studyId").eq(study_id)}
+    while True:
+        resp = sessions_table.query(**kwargs)
+        items.extend(resp.get("Items", []))
+        if "LastEvaluatedKey" not in resp:
+            break
+        kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
+    sessions = [{k: item[k] for k in SESSION_SUMMARY_FIELDS if k in item} for item in items]
+    sessions.sort(key=lambda x: x.get("endedAt", ""), reverse=True)
+    return _json(200, {"sessions": sessions})
+
+
+def get_session(event):
+    """
+    Handles GET /studies/{id}/sessions/{sessionId}: one interview plus its full transcript,
+    so every quote on the dashboard can be traced back to the line it came from.
+    """
+    params = event.get("pathParameters", {})
+    study_id, session_id = params.get("id"), params.get("sessionId")
+    item = sessions_table.get_item(Key={"studyId": study_id, "sessionId": session_id}).get("Item")
+    if not item:
+        return _json(404, {"error": "session not found"})
+
+    transcript = []
+    key = item.get("transcriptKey")
+    if key:
+        try:
+            raw = json.loads(s3.get_object(Bucket=TRANSCRIPTS_BUCKET, Key=key)["Body"].read())
+            # Drop the interviewer's system prompt; the founder only needs the conversation.
+            transcript = [m for m in raw if m.get("role") in ("user", "assistant")]
+        except ClientError as e:
+            print(f"Could not read transcript {key}: {e}")
+
+    session = {k: item[k] for k in SESSION_SUMMARY_FIELDS if k in item}
+    session["transcript"] = transcript
+    return _json(200, session)

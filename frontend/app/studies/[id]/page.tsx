@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { apiFetch, Study } from "../../lib/api";
+import { apiFetch, SessionSummary, Study } from "../../lib/api";
 import { publishStudy } from "../../actions";
 import InviteLink from "./InviteLink";
 import SynthesisPanel from "./SynthesisPanel";
+import SessionsList from "./SessionsList";
 import ThemesList from "./ThemesList";
 
 export const dynamic = "force-dynamic";
@@ -24,6 +25,12 @@ export default async function StudyDetailPage({
   }
 
   const study: Study = await res.json();
+  // The interview list is secondary; if it fails, still render the study.
+  let sessions: SessionSummary[] | null = null;
+  try {
+    const sres = await apiFetch(`/studies/${id}/sessions`);
+    if (sres.ok) sessions = ((await sres.json()) as { sessions: SessionSummary[] }).sessions;
+  } catch {}
   const isLive = study.status === "live";
   const inviteUrl = study.inviteToken ? `${APP_URL}/interview/${study.inviteToken}` : null;
 
@@ -95,7 +102,14 @@ export default async function StudyDetailPage({
         error={study.synthesisError}
       />
       {/* Absent until the first run finishes; a FAILED run keeps the old themes. */}
-      {study.themes && <ThemesList themes={study.themes} />}
+      {study.themes && <ThemesList studyId={study.studyId} themes={study.themes} />}
+
+      <h2>Interviews{sessions && sessions.length > 0 ? ` (${sessions.length})` : ""}</h2>
+      {sessions ? (
+        <SessionsList studyId={study.studyId} sessions={sessions} />
+      ) : (
+        <p className="hint">Couldn&apos;t load the interview list.</p>
+      )}
     </>
   );
 }

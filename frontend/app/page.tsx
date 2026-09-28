@@ -42,10 +42,36 @@ export default async function DashboardPage() {
 
   return (
     <>
+      <section className="hero">
+        <h1>Talk to fifty users by Friday.</h1>
+        <p className="lede-left">
+          Fieldwork runs adaptive voice interviews with your users, then turns every conversation
+          into a few ranked themes, each backed by the exact words people said.
+        </p>
+        <ol className="how">
+          <li>
+            <strong>Set a goal</strong>
+            <span>What you want to learn, plus a few seed questions.</span>
+          </li>
+          <li>
+            <strong>Share one link</strong>
+            <span>An AI interviewer talks to each user and asks real follow-ups.</span>
+          </li>
+          <li>
+            <strong>Read the themes</strong>
+            <span>Ranked by how many people raised them, with quotes you can trace.</span>
+          </li>
+        </ol>
+      </section>
+
       <div className="row-between">
-        <h1>Studies</h1>
+        <h2>Your studies</h2>
+        {studies.length > 0 && (
+          <Link href="/studies/new" className="hint">
+            + New study
+          </Link>
+        )}
       </div>
-      <p className="subtitle">Define a research goal, publish it, and share the interview link.</p>
 
       {error && <div className="error-box">Couldn&apos;t load studies: {error}</div>}
 
