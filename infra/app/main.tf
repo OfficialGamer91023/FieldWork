@@ -738,7 +738,7 @@ variable "synthesis_model" {
   description = "Featherless model for synthesis. Set to a bogus name to test the failure path."
   type        = string
   # Synthesis is one off-the-hot-path call per study, so it can afford a far
-  # bigger model than the real-time interview loop (which stays on the 7B).
+  # slower, deeper model than the real-time interview loop (which picks for first-token speed).
   default = "deepseek-ai/DeepSeek-V4.1-Flash"
 }
 
