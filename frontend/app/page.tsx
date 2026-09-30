@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { apiFetch, apiConfigured, StudySummary } from "./lib/api";
+import ScrollBox from "./ScrollBox";
 
 export const dynamic = "force-dynamic";
 
@@ -86,14 +87,18 @@ export default async function DashboardPage() {
         </div>
       )}
 
-      {studies.map((s) => (
-        <Link key={s.studyId} href={`/studies/${s.studyId}`} className="card study-link">
-          <div className="row-between">
-            <strong>{s.title}</strong>
-            <StatusBadge status={s.status} />
-          </div>
-        </Link>
-      ))}
+      {studies.length > 0 && (
+        <ScrollBox label="Your studies">
+          {studies.map((s) => (
+            <Link key={s.studyId} href={`/studies/${s.studyId}`} className="card study-link">
+              <div className="row-between">
+                <strong>{s.title}</strong>
+                <StatusBadge status={s.status} />
+              </div>
+            </Link>
+          ))}
+        </ScrollBox>
+      )}
     </>
   );
 }

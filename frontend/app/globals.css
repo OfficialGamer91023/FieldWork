@@ -559,6 +559,44 @@ mark {
   }
 }
 
+/* Long dashboard lists scroll inside their own box, not the page (ScrollBox.tsx) */
+.scroll-box {
+  max-height: min(64vh, 620px);
+  overflow-y: auto;
+  /* The padding leaves room for the highlight glow and the scrollbar; the negative
+     margins cancel it so the cards still line up with the rest of the page. */
+  margin: 12px -9px 0 -3px;
+  padding: 3px 6px 3px 3px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.scroll-box.short {
+  max-height: min(36vh, 320px);
+}
+.scroll-box.tall {
+  max-height: 72vh;
+}
+.scroll-box.fade-top {
+  mask-image: linear-gradient(to bottom, transparent 0, #000 28px);
+}
+.scroll-box.fade-bottom {
+  mask-image: linear-gradient(to top, transparent 0, #000 28px);
+}
+.scroll-box.fade-top.fade-bottom {
+  mask-image: linear-gradient(to bottom, transparent 0, #000 28px, #000 calc(100% - 28px), transparent 100%);
+}
+.scroll-box:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 12px;
+}
+.scroll-box > div > :first-child {
+  margin-top: 0;
+}
+.scroll-box .turn.highlight {
+  scroll-margin-top: 24px;
+}
+
 /* Live interview: the conversation scrolls inside its own box, not the page */
 .convo {
   position: relative;

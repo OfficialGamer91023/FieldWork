@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { apiFetch, formatWhen, SessionDetail, shortId, TranscriptLine } from "../../../../lib/api";
+import ScrollBox from "../../../../ScrollBox";
 
 export const dynamic = "force-dynamic";
 
@@ -82,11 +83,13 @@ export default async function SessionPage({
       {session.answers && session.answers.length > 0 && (
         <>
           <h2>Key takeaways</h2>
-          <ul className="field-list">
-            {session.answers.map((a, i) => (
-              <li key={i}>{a}</li>
-            ))}
-          </ul>
+          <ScrollBox size="short" label="Key takeaways">
+            <ul className="field-list">
+              {session.answers.map((a, i) => (
+                <li key={i}>{a}</li>
+              ))}
+            </ul>
+          </ScrollBox>
         </>
       )}
 
@@ -94,23 +97,25 @@ export default async function SessionPage({
       {session.transcript.length === 0 ? (
         <p className="hint">The transcript for this interview isn&apos;t available.</p>
       ) : (
-        <div className="transcript">
-          {session.transcript.map((line, i) => (
-            <div
-              key={i}
-              id={i === quoteLine ? "quote" : undefined}
-              className={`turn ${line.role === "assistant" ? "agent" : "user"}${
-                i === quoteLine ? " highlight" : ""
-              }`}
-            >
-              <div className="who">
-                {line.role === "assistant" ? "Interviewer" : "Participant"}
-                {line.interrupted && <span className="hint"> · cut off</span>}
+        <ScrollBox size="tall" label="Transcript">
+          <div className="transcript">
+            {session.transcript.map((line, i) => (
+              <div
+                key={i}
+                id={i === quoteLine ? "quote" : undefined}
+                className={`turn ${line.role === "assistant" ? "agent" : "user"}${
+                  i === quoteLine ? " highlight" : ""
+                }`}
+              >
+                <div className="who">
+                  {line.role === "assistant" ? "Interviewer" : "Participant"}
+                  {line.interrupted && <span className="hint"> · cut off</span>}
+                </div>
+                <div>{i === quoteLine ? <Highlighted text={line.content} quote={q} /> : line.content}</div>
               </div>
-              <div>{i === quoteLine ? <Highlighted text={line.content} quote={q} /> : line.content}</div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        </ScrollBox>
       )}
     </>
   );
