@@ -18,7 +18,7 @@ transcript it came from.
 
 The output isn't fifty transcripts. It's *"4 ranked themes, and here's who said what."*
 
-**Demo video:** _add link_ · **Live app:** _add link_ · Built solo for the AssemblyAI Voice Agent Hackathon (September 2026).
+**Demo video:** [watch on Loom](https://www.loom.com/share/9e40ed00e12a4f8db41c188391297c99) · **Live app:** [fieldwork-topaz.vercel.app](https://fieldwork-topaz.vercel.app) · Built solo for the AssemblyAI Voice Agent Hackathon (September 2026).
 
 ---
 

@@ -55,7 +55,11 @@ REPLY_DEADLINE = float(os.environ.get("REPLY_DEADLINE", "12"))
 COVERAGE_MODEL = os.environ.get("COVERAGE_MODEL", FALLBACK_MODEL)
 MAX_USER_TURNS = int(os.environ.get("MAX_USER_TURNS", "14"))
 POLLY_VOICE = os.environ.get("POLLY_VOICE", "Matthew")
-MAX_SESSION_SEC = int(os.environ.get("MAX_SESSION_SEC", "1200"))
+MAX_SESSION_SEC = int(os.environ.get("MAX_SESSION_SEC", "600"))
+# The app is public with no sign-in, so cap what one person can run up: how many calls stream
+# to AssemblyAI at once, and how long a silent (abandoned) call can stay open.
+MAX_ACTIVE_SESSIONS = int(os.environ.get("MAX_ACTIVE_SESSIONS", "3"))
+IDLE_SEC = int(os.environ.get("IDLE_SEC", "90"))
 # Hybrid reasoning models (Qwen3.x, DeepSeek) think before answering unless told not to, which
 # would eat the latency budget. Each chat template reads its own key and ignores the other.
 NO_THINKING = {"chat_template_kwargs": {"enable_thinking": False, "thinking": False}}
@@ -99,6 +103,7 @@ WANTS_TO_STOP = re.compile(
     re.IGNORECASE,
 )
 GOODBYE = "That's everything I wanted to ask. Thank you so much for your time, this was really helpful. Goodbye!"
+IDLE_GOODBYE = "It sounds like you've stepped away, so I'll end the interview here. Thanks for your time!"
 NOTE = "[Note to the interviewer, not said by the participant: {}]"
 WRAP_NOTES = {
     "goal_covered": "you now have everything you need. Reply to what they just said in one short "
@@ -128,6 +133,9 @@ WORD = re.compile(r"[a-z0-9']+")
 
 class EndInterview(Exception):
     """Raised inside the task group to finish the call on the interviewer's side."""
+
+
+active_sessions = 0  # interviews currently streaming; one event loop, so no lock needed
 
 
 def connect_to_assemblyai():
@@ -199,6 +207,8 @@ class Session:
         self.agent_text = ""  # everything the agent said this reply, for echo detection
         self.wrapping_up = False
         self.playback_ended_at = 0.0  # loop time when the browser last finished playing us
+        self.last_heard = asyncio.get_running_loop().time()  # participant spoke, or we stopped talking
+        self.idle_since: float | None = None  # set once the idle goodbye has started
         self.send_lock = asyncio.Lock()
 
     # ---- sending ---------------------------------------------------------------------------
@@ -232,7 +242,9 @@ class Session:
         try:
             buf = ""
             asked = False
-            if self.greeting and self.messages[-1]["content"] == KICKOFF:
+            if reason == "participant_idle":
+                replies = self.fixed_text(IDLE_GOODBYE)
+            elif self.greeting and self.messages[-1]["content"] == KICKOFF:
                 replies = self.fixed_text(self.greeting)
             else:
                 replies = self.llm_text(self.steered_messages(reason))
@@ -422,6 +434,8 @@ class Session:
     # ---- natural ending ---------------------------------------------------------------------
     def wrap_reason(self) -> str | None:
         """Whether this reply should be the goodbye. Decided here, not by the interview model."""
+        if self.idle_since is not None:
+            return "participant_idle"
         turns = self.user_turns()
         if not turns:
             return None  # the greeting
@@ -532,6 +546,29 @@ class Session:
     def agent_busy(self) -> bool:
         return self.state in ("thinking", "speaking")
 
+    # ---- idle ------------------------------------------------------------------------------
+    def heard_participant(self):
+        self.last_heard = asyncio.get_running_loop().time()
+        self.idle_since = None  # they came back mid-goodbye: carry on with the interview
+
+    async def idle_watch(self):
+        """End a call nobody is talking in, so an abandoned tab can't stream silence (and bill
+        speech-to-text) until the session cap. Only counts time we spend listening."""
+        while True:
+            await asyncio.sleep(5)
+            now = asyncio.get_running_loop().time()
+            if self.idle_since is not None:
+                if now - self.idle_since > 45:
+                    raise EndInterview()  # the goodbye never finished playing; the tab is gone
+                continue
+            if self.state == "listening" and now - self.last_heard >= IDLE_SEC:
+                print(f"[{self.session_id}] no speech for {IDLE_SEC}s, ending")
+                self.idle_since = now
+                self.start_reply()
+            elif now - self.last_heard >= IDLE_SEC * 3:
+                # Stuck "speaking": the browser stopped reporting playback, so nobody is there.
+                raise EndInterview()
+
     # ---- STT events ------------------------------------------------------------------------
     async def on_partial(self, text: str):
         if not text.strip():
@@ -540,6 +577,7 @@ class Session:
             if self.is_echo(text) or len(words(text)) < 2:
                 return
             await self.interrupt()
+        self.heard_participant()
         await self.send_json({"type": "user", "text": text, "final": False})
 
     async def on_end_of_turn(self, text: str):
@@ -548,6 +586,7 @@ class Session:
             return
         if self.agent_busy():
             await self.interrupt()
+        self.heard_participant()
         await self.send_json({"type": "user", "text": text, "final": True})
         self.transcript.append({"role": "user", "content": text, "at": now_iso()})
         # If they kept talking after an interruption, fold it into the same user turn.
@@ -566,6 +605,7 @@ class Session:
                 await self.send_json({"type": "end"})
                 raise EndInterview()
             self.playback_ended_at = asyncio.get_running_loop().time()
+            self.last_heard = self.playback_ended_at  # the silence clock starts when we stop talking
             await self.set_state("listening")
 
     # ---- persistence ------------------------------------------------------------------------
@@ -639,8 +679,22 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.close(code=1008)
         return
 
+    global active_sessions
     await websocket.accept()
-    session = Session(websocket, items[0])
+    if active_sessions >= MAX_ACTIVE_SESSIONS:
+        # Accept first so the browser sees the reason (1013 = try again later), not a failed handshake.
+        print(f"[ws] turned away: {active_sessions} interviews already running")
+        await websocket.close(code=1013)
+        return
+    active_sessions += 1
+    try:
+        await run_interview(websocket, items[0])
+    finally:
+        active_sessions -= 1
+
+
+async def run_interview(websocket: WebSocket, study: dict):
+    session = Session(websocket, study)
     print(f"[{session.session_id}] interview started for study {session.study_id}")
     status = "aborted"
 
@@ -694,6 +748,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     async with asyncio.TaskGroup() as tg:
                         tg.create_task(browser_to_aai())
                         tg.create_task(aai_to_browser())
+                        tg.create_task(session.idle_watch())
             except* WebSocketDisconnect:
                 status = "completed"
                 session.end_reason = session.end_reason or "participant_hung_up"

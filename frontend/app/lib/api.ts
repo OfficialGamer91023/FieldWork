@@ -60,7 +60,7 @@ export type SessionSummary = {
   // How many seed questions the live note-taker judged answered, and why the call ended.
   topicsCovered?: number;
   topicsTotal?: number;
-  endReason?: "goal_covered" | "participant_stopped" | "participant_hung_up" | "turn_cap" | "time_cap" | "unknown";
+  endReason?: "goal_covered" | "participant_stopped" | "participant_hung_up" | "turn_cap" | "time_cap" | "participant_idle" | "unknown";
   // Filled in by the async extractor a few seconds after the call ends.
   processedAt?: string;
   sentiment?: Sentiment;

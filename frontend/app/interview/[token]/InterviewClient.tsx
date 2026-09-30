@@ -316,6 +316,11 @@ export default function InterviewClient({
       opened = true;
       try {
         await startMic(ws);
+        // Turned away (e.g. the interviewer is busy) while the mic prompt was open: release it.
+        if (wsRef.current !== ws) {
+          teardown();
+          return;
+        }
         setPhase("live");
       } catch (e) {
         console.error(e);
@@ -340,6 +345,9 @@ export default function InterviewClient({
       if (wsRef.current !== ws) return; // we hung up ourselves
       if (event.code === 1008) {
         setError("This interview isn't available right now. The link may have been closed.");
+      } else if (event.code === 1013) {
+        // The server caps how many interviews run at once.
+        setError("The interviewer is busy with other conversations right now. Please try again in a few minutes.");
       } else if (!opened) {
         setError("We couldn't connect to the interviewer. Check your connection and try again.");
       }
