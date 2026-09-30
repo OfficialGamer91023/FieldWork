@@ -34,81 +34,96 @@ export default async function StudyDetailPage({
   const isLive = study.status === "live";
   const inviteUrl = study.inviteToken ? `${APP_URL}/interview/${study.inviteToken}` : null;
 
+  // Dropped interviews aren't synthesized, so they don't count toward a theme's reach.
+  const completed = sessions?.filter((s) => s.status !== "aborted").length;
+
   return (
     <>
-      <p>
+      <p className="back">
         <Link href="/">← All studies</Link>
       </p>
 
-      <div className="row-between">
+      <header className="study-head">
+        <p className="kicker">
+          Study · <span className={isLive ? "live" : "draft"}>{isLive ? "Live" : "Draft"}</span>
+          {sessions ? ` · ${sessions.length} ${sessions.length === 1 ? "interview" : "interviews"}` : ""}
+        </p>
         <h1>{study.title}</h1>
-        <span className={`badge ${isLive ? "live" : "draft"}`}>{study.status}</span>
-      </div>
+        {study.goal && <p className="study-lede">{study.goal}</p>}
 
-      {study.goal && (
-        <>
-          <h2>Research goal</h2>
-          <p>{study.goal}</p>
-        </>
-      )}
-
-      {study.seedQuestions && study.seedQuestions.length > 0 && (
-        <>
-          <h2>Seed questions</h2>
-          <ul className="field-list">
-            {study.seedQuestions.map((q, i) => (
-              <li key={i}>{q}</li>
-            ))}
-          </ul>
-        </>
-      )}
-
-      <h2>Interview link</h2>
-      {isLive ? (
-        inviteUrl ? (
-          <>
-            <p className="hint mt-2">Share this link with participants:</p>
-            <InviteLink url={inviteUrl} />
-            <p className="mt-4">
+        {isLive ? (
+          inviteUrl ? (
+            <div className="study-bar">
+              <span className="bar-label">Invite link</span>
+              <InviteLink url={inviteUrl} />
               <a href={inviteUrl} target="_blank" rel="noreferrer" className="btn secondary">
                 Open interview page
               </a>
-            </p>
-          </>
+            </div>
+          ) : (
+            <p className="hint mt-4">This study has no invite token.</p>
+          )
         ) : (
-          <p className="hint">This study has no invite token.</p>
-        )
-      ) : (
-        <>
-          <p className="hint mt-2">
-            This study is a <strong>draft</strong>. Publish it to activate the interview link and
-            let participants start interviews.
-          </p>
-          <form action={publishStudy} className="mt-4">
-            <input type="hidden" name="id" value={study.studyId} />
-            <button type="submit" className="btn big">
-              Publish study
-            </button>
-          </form>
-        </>
-      )}
+          <div className="study-bar">
+            <span className="bar-label">
+              This study is a draft. Publish it to activate the interview link.
+            </span>
+            <form action={publishStudy}>
+              <input type="hidden" name="id" value={study.studyId} />
+              <button type="submit" className="btn">
+                Publish study
+              </button>
+            </form>
+          </div>
+        )}
+      </header>
 
-      <h2>Themes</h2>
-      <SynthesisPanel
-        studyId={study.studyId}
-        status={study.synthesisStatus}
-        startedAt={study.synthesisStartedAt}
-        synthesizedAt={study.synthesizedAt}
-        error={study.synthesisError}
-      />
-      {/* Absent until the first run finishes; a FAILED run keeps the old themes. */}
-      {study.themes && <ThemesList studyId={study.studyId} themes={study.themes} />}
+      <section aria-labelledby="themes-heading">
+        <div className="section-head">
+          <h2 id="themes-heading">What we heard</h2>
+          {study.themes && study.themes.length > 0 && (
+            <span className="hint">
+              {study.themes.length} {study.themes.length === 1 ? "theme" : "themes"}, most common first
+            </span>
+          )}
+        </div>
+        <SynthesisPanel
+          studyId={study.studyId}
+          status={study.synthesisStatus}
+          startedAt={study.synthesisStartedAt}
+          synthesizedAt={study.synthesizedAt}
+          error={study.synthesisError}
+        />
+        {/* Absent until the first run finishes; a FAILED run keeps the old themes. */}
+        {study.themes && (
+          <ThemesList studyId={study.studyId} themes={study.themes} interviewCount={completed} />
+        )}
+      </section>
 
-      <h2>Interviews{sessions && sessions.length > 0 ? ` (${sessions.length})` : ""}</h2>
-      {sessions ? (
-        <SessionsList studyId={study.studyId} sessions={sessions} />
-      ) : (
-        <p className="hint">Couldn&apos;t load the interview list.</p>
+      <section aria-labelledby="interviews-heading">
+        <div className="section-head">
+          <h2 id="interviews-heading">Interviews</h2>
+          {sessions && sessions.length > 0 && <span className="hint">Newest first</span>}
+        </div>
+        {sessions ? (
+          <SessionsList studyId={study.studyId} sessions={sessions} />
+        ) : (
+          <p className="hint mt-4">Couldn&apos;t load the interview list.</p>
+        )}
+      </section>
+
+      {study.seedQuestions && study.seedQuestions.length > 0 && (
+        <section aria-labelledby="seed-heading">
+          <div className="section-head">
+            <h2 id="seed-heading">Seed questions</h2>
+            <span className="hint">What the interviewer sets out to cover</span>
+          </div>
+          <ol className="seed-list">
+            {study.seedQuestions.map((q, i) => (
+              <li key={i}>{q}</li>
+            ))}
+          </ol>
+        </section>
       )}
     </>
   );

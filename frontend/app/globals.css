@@ -1,15 +1,63 @@
 :root {
-  --bg: #0b0c10;
-  --panel: #15171e;
-  --panel-2: #1c1f28;
-  --border: #2a2e3a;
-  --text: #e8eaf0;
-  --muted: #9aa1b2;
-  --accent: #6c8cff;
-  --accent-hover: #5678ff;
-  --green: #35c46b;
-  --amber: #e0a53b;
-  --danger: #ff6b6b;
+  /* Light (default). Dark values below follow the OS setting unless the header toggle
+     pinned a theme via data-theme on <html>. */
+  --bg: #f6f4ef;
+  --panel: #fffdf8;
+  --panel-2: #efebe2;
+  --border: #e2ddd2;
+  --border-strong: #d8d2c4;
+  --text: #1b1a17;
+  --text-2: #3d3a33;
+  --muted: #5f5b52;
+  --accent: #b23c0a;
+  --accent-hover: #8f2f07;
+  --on-accent: #fffdf8;
+  --green: #0f6e55;
+  --amber: #9a4f07;
+  --danger: #b4232f;
+  --dot-off: #dcd6c9;
+  --serif: var(--font-serif), Georgia, "Times New Roman", serif;
+  --sans: var(--font-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161412;
+    --panel: #1f1c19;
+    --panel-2: #26221e;
+    --border: #2e2a25;
+    --border-strong: #3a352f;
+    --text: #efe9df;
+    --text-2: #cfc7b9;
+    --muted: #a39c8f;
+    --accent: #ef8a55;
+    --accent-hover: #f7a577;
+    --on-accent: #161412;
+    --green: #6fd3ae;
+    --amber: #f2b766;
+    --danger: #ff8f98;
+    --dot-off: #3a352f;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161412;
+  --panel: #1f1c19;
+  --panel-2: #26221e;
+  --border: #2e2a25;
+  --border-strong: #3a352f;
+  --text: #efe9df;
+  --text-2: #cfc7b9;
+  --muted: #a39c8f;
+  --accent: #ef8a55;
+  --accent-hover: #f7a577;
+  --on-accent: #161412;
+  --green: #6fd3ae;
+  --amber: #f2b766;
+  --danger: #ff8f98;
+  --dot-off: #3a352f;
+  color-scheme: dark;
 }
 
 * {
@@ -22,8 +70,7 @@ body {
   padding: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-    Helvetica, Arial, sans-serif;
+  font-family: var(--sans);
   line-height: 1.5;
 }
 
@@ -36,7 +83,7 @@ a:hover {
 }
 
 .container {
-  max-width: 760px;
+  max-width: 1120px;
   margin: 0 auto;
   padding: 0 16px 80px;
 }
@@ -53,9 +100,10 @@ a:hover {
   justify-content: space-between;
 }
 .brand {
-  font-weight: 700;
-  font-size: 18px;
-  letter-spacing: -0.01em;
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: 28px;
+  line-height: 1;
   color: var(--text);
 }
 .brand:hover {
@@ -63,16 +111,19 @@ a:hover {
 }
 
 h1 {
-  font-size: 26px;
-  letter-spacing: -0.02em;
-  margin: 0 0 4px;
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: 48px;
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+  margin: 0 0 8px;
 }
 h2 {
-  font-size: 15px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--muted);
-  margin: 28px 0 12px;
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: 32px;
+  line-height: 1.15;
+  margin: 40px 0 12px;
 }
 .subtitle {
   color: var(--muted);
@@ -110,7 +161,7 @@ h2 {
   align-items: center;
   gap: 8px;
   background: var(--accent);
-  color: white;
+  color: var(--on-accent);
   border: none;
   border-radius: 8px;
   padding: 10px 16px;
@@ -153,13 +204,13 @@ h2 {
 }
 .badge.live {
   color: var(--green);
-  border-color: rgba(53, 196, 107, 0.4);
-  background: rgba(53, 196, 107, 0.1);
+  border-color: color-mix(in srgb, var(--green) 40%, transparent);
+  background: color-mix(in srgb, var(--green) 10%, transparent);
 }
 .badge.draft {
   color: var(--amber);
-  border-color: rgba(224, 165, 59, 0.4);
-  background: rgba(224, 165, 59, 0.1);
+  border-color: color-mix(in srgb, var(--amber) 40%, transparent);
+  background: color-mix(in srgb, var(--amber) 10%, transparent);
 }
 
 label {
@@ -223,8 +274,8 @@ textarea {
 }
 
 .error-box {
-  border: 1px solid rgba(255, 107, 107, 0.4);
-  background: rgba(255, 107, 107, 0.08);
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
   color: var(--danger);
   border-radius: 8px;
   padding: 14px 16px;
@@ -262,7 +313,7 @@ textarea {
 }
 .dot.live {
   background: var(--green);
-  box-shadow: 0 0 0 4px rgba(53, 196, 107, 0.2);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--green) 20%, transparent);
 }
 .dot.connecting {
   background: var(--amber);
@@ -492,11 +543,11 @@ textarea {
 }
 .turn.highlight {
   border-color: var(--amber);
-  box-shadow: 0 0 0 3px rgba(224, 165, 59, 0.2);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 20%, transparent);
   scroll-margin-top: 80px;
 }
 mark {
-  background: rgba(224, 165, 59, 0.35);
+  background: color-mix(in srgb, var(--amber) 30%, transparent);
   color: inherit;
   border-radius: 3px;
   padding: 0 2px;
@@ -507,12 +558,12 @@ mark {
   margin-bottom: 12px;
 }
 .hero h1 {
-  font-size: 34px;
-  line-height: 1.15;
+  font-size: 64px;
+  line-height: 1;
 }
 .lede-left {
-  color: var(--muted);
-  font-size: 17px;
+  color: var(--text-2);
+  font-size: 20px;
   max-width: 600px;
   margin: 10px 0 24px;
 }
@@ -549,7 +600,7 @@ mark {
     grid-template-columns: 1fr;
   }
   .hero h1 {
-    font-size: 28px;
+    font-size: 40px;
   }
   .turn.user {
     margin-left: 16px;
@@ -656,7 +707,7 @@ mark {
   color: var(--text);
   font-size: 13px;
   cursor: pointer;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
 }
 .convo-jump:hover {
   border-color: var(--accent);
@@ -707,4 +758,378 @@ main:has(.interview-stage.live) {
   height: 100%;
   background: var(--green);
   transition: width 0.6s ease;
+}
+
+/* ---- Editorial "report" look (study page, header, theme toggle) ---- */
+main:has(.interview-stage) {
+  max-width: 760px;
+}
+.site-header nav {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  font-size: 15px;
+}
+.site-header nav a:not(.btn) {
+  color: var(--text-2);
+}
+.theme-toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+}
+.theme-toggle:hover {
+  border-color: var(--accent);
+}
+.theme-toggle:focus-visible,
+.btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.back {
+  font-size: 14px;
+  margin: 0 0 28px;
+}
+.kicker {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 14px;
+}
+.kicker .live {
+  color: var(--green);
+}
+.kicker .draft {
+  color: var(--amber);
+}
+.study-head h1 {
+  font-size: 72px;
+  line-height: 1;
+  margin: 0;
+}
+.study-lede {
+  font-size: 20px;
+  line-height: 1.5;
+  color: var(--text-2);
+  max-width: 780px;
+  margin: 16px 0 0;
+}
+.study-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 24px;
+}
+.study-bar form {
+  margin: 0;
+}
+.bar-label {
+  font-size: 14px;
+  color: var(--muted);
+}
+.invite-box {
+  flex: 0 1 460px;
+  min-width: 0;
+  background: var(--panel);
+  border-color: var(--border-strong);
+  border-radius: 6px;
+  padding: 4px 4px 4px 12px;
+  word-break: normal;
+}
+.invite-box > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+}
+.invite-box .btn {
+  padding: 6px 12px;
+}
+
+.section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin-top: 64px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.section-head h2 {
+  font-size: 40px;
+  margin: 0;
+}
+.section-head .hint {
+  font-size: 15px;
+}
+
+/* Synthesis: a quiet status line with the button, not a card */
+.synthesis-panel.card {
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  padding: 16px 0;
+}
+.synthesis-panel .hint {
+  font-size: 15px;
+}
+
+/* Themes: numbered report sections with the evidence beside them */
+.themes {
+  margin: 0;
+}
+.themes .theme {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) 360px;
+  gap: 40px;
+  padding: 28px 0;
+  border-top: 1px solid var(--border);
+}
+.themes .theme:first-child {
+  border-top: 0;
+}
+.theme-num {
+  font-family: var(--serif);
+  font-size: 56px;
+  line-height: 1;
+  color: var(--accent);
+}
+.theme-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.themes .theme h3 {
+  display: block;
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: 32px;
+  line-height: 1.15;
+  margin: 0;
+}
+.theme-reach {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--muted);
+}
+.dot-meter {
+  display: flex;
+  gap: 4px;
+}
+.dot-meter span {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--dot-off);
+}
+.dot-meter span.on {
+  background: var(--accent);
+}
+.themes .theme-bar {
+  width: 120px;
+  margin: 0;
+  background: var(--dot-off);
+}
+.theme-body p {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--text-2);
+}
+.themes .theme-quotes {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.themes .theme-quotes li + li {
+  margin-top: 0;
+}
+.themes .theme-quotes blockquote {
+  margin: 0 0 6px;
+  padding: 0;
+  border: 0;
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 22px;
+  line-height: 1.3;
+  color: var(--text);
+}
+.themes .quote-source {
+  font-size: 14px;
+  color: var(--accent);
+}
+
+/* Interviews: one table-like list */
+.interview-table {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.it-head,
+.it-row {
+  display: grid;
+  grid-template-columns: 100px 190px 80px 90px 120px minmax(0, 1fr);
+  gap: 16px;
+  align-items: center;
+  padding: 14px 20px;
+}
+.it-head {
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.it-row {
+  border-top: 1px solid var(--border);
+  color: var(--text);
+  font-size: 15px;
+}
+.it-row:first-child {
+  border-top: 0;
+}
+.it-row:hover {
+  text-decoration: none;
+  background: var(--panel-2);
+}
+.it-id {
+  font-family: var(--mono);
+  font-size: 14px;
+}
+.it-when,
+.it-gist {
+  color: var(--text-2);
+}
+.it-gist {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.it-label {
+  display: none;
+}
+.pill {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--panel-2);
+  color: var(--text-2);
+}
+.pill.positive {
+  background: color-mix(in srgb, var(--green) 14%, transparent);
+  color: var(--green);
+}
+.pill.negative {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+.pill.mixed,
+.pill.dropped {
+  background: color-mix(in srgb, var(--amber) 14%, transparent);
+  color: var(--amber);
+}
+.interview-table-wrap .scroll-box {
+  margin: 0;
+  padding: 0;
+}
+
+.seed-list {
+  margin: 16px 0 0;
+  padding-left: 22px;
+  display: grid;
+  gap: 10px;
+  font-size: 17px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+@media (max-width: 900px) {
+  .study-head h1 {
+    font-size: 48px;
+  }
+  .section-head h2 {
+    font-size: 32px;
+  }
+  .themes .theme {
+    grid-template-columns: 44px minmax(0, 1fr);
+    gap: 16px 20px;
+  }
+  .theme-num {
+    font-size: 40px;
+  }
+  .themes .theme-quotes {
+    grid-column: 2;
+  }
+  .it-head {
+    display: none;
+  }
+  .it-row {
+    grid-template-columns: 1fr auto;
+    gap: 6px 12px;
+  }
+  .it-row .it-when,
+  .it-row .it-answers,
+  .it-row .it-topics {
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .it-label {
+    display: inline;
+  }
+  .it-gist {
+    grid-column: 1 / -1;
+    white-space: normal;
+  }
+}
+.themes .theme-bar {
+  display: block;
+}
+.theme-evidence {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.theme-evidence details summary {
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--muted);
+}
+.theme-evidence details summary:hover {
+  color: var(--text);
+}
+.theme-evidence details[open] summary {
+  margin-bottom: 14px;
+}
+.themes .theme-quotes blockquote {
+  font-size: 20px;
+}
+@media (max-width: 900px) {
+  .theme-evidence {
+    grid-column: 2;
+  }
 }
